@@ -10,3 +10,6 @@ coverage/
 # Only README.md is published; all other Markdown stays local.
 *.md
 !/README.md
+
+.dev.vars
+.wrangler/

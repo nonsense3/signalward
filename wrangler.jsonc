@@ -3,11 +3,12 @@
   //   Local:  npx wrangler dev
   //   Deploy: npx wrangler deploy
   //
-  // The Worker requires Supabase (there is no local filesystem on Workers) and the three SignalWard
-  // secrets. Set them with `wrangler secret put <NAME>` (see the Cloudflare section of the README):
+  // The Worker runs in production mode and requires Supabase (Workers have no filesystem).
+  // Set these as secrets (dashboard -> Settings -> Variables and Secrets, or `wrangler secret put`):
   //   SUPABASE_URL  SUPABASE_ANON_KEY  PUBLIC_URL
-  //   SIGNALWARD_SESSION_SECRET  SIGNALWARD_INDICATOR_KEY  SIGNALWARD_SIGNING_KEY
-  //   GEMINI_API_KEY (optional)  SIGNALWARD_PREVIOUS_SIGNING_KEYS (optional)
+  //   SIGNALWARD_SESSION_SECRET  SIGNALWARD_INDICATOR_KEY  SIGNALWARD_SIGNING_KEY  SIGNALWARD_REPORT_ENCRYPTION_KEY
+  //   optional: GEMINI_API_KEY  SIGNALWARD_PREVIOUS_SIGNING_KEYS  SIGNALWARD_PREVIOUS_INDICATOR_KEYS
+  //             SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS  SIGNALWARD_INDICATOR_KEY_VERSION
   "name": "signalward",
   "main": "worker.mjs",
   "compatibility_date": "2025-09-01",

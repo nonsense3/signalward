@@ -14,14 +14,9 @@ import { SECURITY_HEADERS, deriveKey } from "./apps/web/src/security.ts";
 import { SupabaseStore } from "./apps/web/src/store.ts";
 import { loadSigningKey } from "./packages/receipts/src/index.ts";
 
-const APP_ROUTES = {
-  "/": "/index.html",
-  "/scan": "/scan.html",
-  "/account": "/account.html",
-  "/auth": "/auth.html",
-  "/auth/callback": "/auth.html",
-  "/verify": "/verify.html",
-};
+// Cloudflare's asset handler serves /scan from scan.html and redirects /scan.html -> /scan,
+// so routes map to extensionless paths. Only the OAuth callback needs an alias.
+const APP_ROUTES = { "/": "/", "/scan": "/scan", "/account": "/account", "/auth": "/auth", "/auth/callback": "/auth", "/verify": "/verify" };
 const PROTECTED = new Set(["/scan", "/account"]);
 
 let cached = null;
@@ -113,7 +108,7 @@ async function serveAsset(env, request, url, path) {
   const mapped = APP_ROUTES[path];
   let response = await env.ASSETS.fetch(new Request(new URL(mapped ?? path, url.origin), request));
   if (response.status === 404) {
-    const page = await env.ASSETS.fetch(new Request(new URL("/404.html", url.origin), request));
+    const page = await env.ASSETS.fetch(new Request(new URL("/404", url.origin), request));
     response = new Response(page.body, { status: 404, headers: page.headers });
   }
   const headers = new Headers(response.headers);
@@ -127,6 +122,7 @@ export default {
     let path = url.pathname;
     if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
     if (path.endsWith(".html") && APP_ROUTES[path.slice(0, -5)]) path = path.slice(0, -5);
+    if (path === "/index") path = "/";
 
     const isApi = path.startsWith("/api/") || path === "/.well-known/signalward-keys.json";
     let api = null;
