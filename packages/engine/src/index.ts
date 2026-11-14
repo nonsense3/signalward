@@ -12,6 +12,8 @@ export type WorkspaceContext = {
   workspace: string;
   indicatorKey: Uint8Array;
   keyVersion: string;
+  /** Active key followed by retained previous keys during a rotation overlap. */
+  indicatorKeys?: { key: Uint8Array; keyVersion: string }[];
   /** Earlier sightings and blocklist membership for these tags, within this workspace only. */
   lookup(tags: string[]): Promise<{ seen: Map<string, number>; blocked: Set<string> }>;
   /** Count one sighting of each tag. */
@@ -25,6 +27,7 @@ export function memoryContext(workspace: string, indicatorKey: Uint8Array): Work
     workspace,
     indicatorKey,
     keyVersion: "k1",
+    indicatorKeys: [{ key: indicatorKey, keyVersion: "k1" }],
     async lookup(tags) {
       return { seen: new Map(tags.map((tag) => [tag, seen.get(tag) ?? 0])), blocked: new Set() };
     },
@@ -95,24 +98,29 @@ export function runRepositoryScan(files: readonly SourceFile[], label: string, c
 async function protectIndicators(raw: readonly RawIndicator[], ctx: WorkspaceContext): Promise<{ indicators: Indicator[]; findings: Finding[] }> {
   const indicators: Indicator[] = [];
   const findings: Finding[] = [];
-  const items = raw.slice(0, 50).map((item) => ({ item, tag: indicatorTag(ctx.indicatorKey, ctx.keyVersion, item.type, item.normalized) }));
-  const tags = items.map((entry) => entry.tag);
+  const keys = ctx.indicatorKeys?.length ? ctx.indicatorKeys : [{ key: ctx.indicatorKey, keyVersion: ctx.keyVersion }];
+  const items = raw.slice(0, 50).map((item) => ({
+    item,
+    versions: keys.map(({ key, keyVersion }) => ({ keyVersion, tag: indicatorTag(key, keyVersion, item.type, item.normalized) })),
+  }));
+  const tags = items.flatMap((entry) => entry.versions.map((version) => version.tag));
   const history = await ctx.lookup(tags);
   await ctx.record(tags);
-  for (const { item, tag } of items) {
-    const blocked = history.blocked.has(tag);
-    const seenBefore = history.seen.get(tag) ?? 0;
-    indicators.push({ type: item.type, display: item.display, tag, keyVersion: ctx.keyVersion, seenBefore, blocked });
+  for (const { item, versions } of items) {
+    const active = versions.find((version) => version.keyVersion === ctx.keyVersion) ?? versions[0]!;
+    const blocked = versions.some((version) => history.blocked.has(version.tag));
+    const seenBefore = Math.max(...versions.map((version) => history.seen.get(version.tag) ?? 0));
+    indicators.push({ type: item.type, display: item.display, tag: active.tag, keyVersion: active.keyVersion, seenBefore, blocked });
     if (blocked) {
       findings.push(finding({ ruleId: "intelligence.workspace_blocklist", category: "intelligence", severity: "high", confidence: "high",
         title: `Blocked ${item.type.replace("_", " ")} reappeared`, description: `${item.display} matches an indicator an analyst blocked in this workspace.`,
         impact: "The same infrastructure is being reused against your users.", remediation: "Review this report, keep the indicator blocked, and notify affected recipients through a trusted channel.",
-        evidence: [{ label: "Indicator", value: item.display }, { label: "Tag", value: tag }] }));
+        evidence: [{ label: "Indicator", value: item.display }, { label: "Tag", value: active.tag }] }));
     } else if (seenBefore >= 2 && item.type !== "amount") {
       findings.push(finding({ ruleId: "intelligence.repeated_indicator", category: "intelligence", severity: "info", confidence: "medium",
         title: `${item.type.replace("_", " ")} seen in ${seenBefore} earlier reports`, description: `${item.display} appeared in ${seenBefore} earlier reports in this workspace.`,
         impact: "Repetition can indicate a campaign. Combined with other findings, it supports blocking the indicator.", remediation: "Review the earlier reports and consider blocking the indicator.",
-        evidence: [{ label: "Indicator", value: item.display }, { label: "Tag", value: tag }] }));
+        evidence: [{ label: "Indicator", value: item.display }, { label: "Tag", value: active.tag }] }));
     }
   }
   return { indicators, findings };

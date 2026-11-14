@@ -4,20 +4,22 @@
  *   node apps/cli/signalward.ts scan <path> [--json] [--out <dir>]
  *   node apps/cli/signalward.ts url <link> [--json]
  *   node apps/cli/signalward.ts verify <receipt.json> [--report <report.json>] [--keys <keys.json>]
- *   node apps/cli/signalward.ts keys       print fresh values for the three SignalWard secrets
+ *   node apps/cli/signalward.ts keys       print fresh values for SignalWard secrets
  *   node apps/cli/signalward.ts keys rotate # rotate receipt key and retain old public keys
+ *   node apps/cli/signalward.ts keys rotate-indicators # rotate indicator key with overlap history
  *   node apps/cli/signalward.ts doctor     validate .env and test Supabase and Gemini connectivity
  * Exit codes: 0 pass or valid, 1 block or invalid, 2 incomplete, usage or runtime error.
  */
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { watch as watchFs, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Report } from "../../packages/contracts/src/index.ts";
 import { ScanInputError, memoryContext, primaryAction, runRepositoryScan, runUrlScan } from "../../packages/engine/src/index.ts";
 import { issueReceipt, loadSigningKey, parseTrustedKeyHistory, trustedKeySet, verifyReceipt, type TrustedKey } from "../../packages/receipts/src/index.ts";
-import { readDirectory } from "../../packages/repo-scan/src/index.ts";
+import { isIgnoredPath, readDirectory } from "../../packages/repo-scan/src/index.ts";
 import { ConfigError, loadEnvFile, readConfig } from "../web/src/env.ts";
+import { parseIndicatorKeyHistory, parseReportEncryptionKeyHistory, resolveSecret } from "../web/src/security.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const env = loadEnvFile(join(root, ".env"));
@@ -87,10 +89,10 @@ async function doctor(): Promise<number> {
     try {
       const response = await fetch(new URL("/auth/v1/settings", config.auth.supabase.url), { headers: { apikey: config.auth.supabase.anonKey }, signal: AbortSignal.timeout(8000) });
       line(response.ok, "supabase auth", response.ok ? `reachable at ${new URL(config.auth.supabase.url).host}` : `HTTP ${response.status}; check SUPABASE_ANON_KEY`);
-      const tables = await fetch(new URL("/rest/v1/reports?select=id&limit=0", config.auth.supabase.url), { headers: { apikey: config.auth.supabase.anonKey }, signal: AbortSignal.timeout(8000) });
+      const tables = await fetch(new URL("/rest/v1/reports?select=id,payload_encrypted&limit=0", config.auth.supabase.url), { headers: { apikey: config.auth.supabase.anonKey }, signal: AbortSignal.timeout(8000) });
       const body = tables.ok ? null : ((await tables.json().catch(() => ({}))) as { code?: string });
       const missing = body?.code === "42P01" || body?.code === "PGRST205";
-      line(!missing, "supabase tables", missing ? "missing; run supabase/migrations/20261114000000_signalward.sql" : "present");
+      line(!missing && tables.ok, "supabase tables", missing ? "missing; run every migration in supabase/migrations/" : !tables.ok ? "schema outdated; run every migration in supabase/migrations/" : "present");
     } catch {
       line(false, "supabase auth", "unreachable; check SUPABASE_URL and your network");
     }
@@ -107,6 +109,58 @@ async function doctor(): Promise<number> {
   return 0;
 }
 
+async function watchRepository(rootDir: string): Promise<number> {
+  let scanning = false;
+  let rerun = false;
+  let timer: NodeJS.Timeout | null = null;
+  let watcher: ReturnType<typeof watchFs>;
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void scan(), 500);
+  };
+  const scan = async () => {
+    if (scanning) {
+      rerun = true;
+      return;
+    }
+    scanning = true;
+    try {
+      const { files, skipped } = await readDirectory(rootDir);
+      const report = runRepositoryScan(files, basename(rootDir), memoryContext("local_cli", randomBytes(32)));
+      if (skipped && report.scope.kind === "repository") report.scope.skipped += skipped;
+      console.log(`\n[${new Date().toLocaleTimeString()}] Repository scan result:`);
+      emit(report);
+    } catch (error) {
+      console.error(`SignalWard watch scan failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      scanning = false;
+      if (rerun) {
+        rerun = false;
+        schedule();
+      }
+    }
+  };
+
+  watcher = watchFs(rootDir, { recursive: true }, (_event, filename) => {
+    const changed = filename === null ? "" : String(filename).replace(/\\/g, "/");
+    if (changed && isIgnoredPath(changed)) return;
+    schedule();
+  });
+  watcher.on("error", (error) => console.error(`SignalWard watcher error: ${error.message}`));
+  console.log(`Watching ${rootDir} for repository changes. Press Ctrl+C to stop.`);
+  await scan();
+  return new Promise((resolve) => {
+    const stop = () => {
+      if (timer) clearTimeout(timer);
+      watcher.close();
+      process.off("SIGTERM", stop);
+      resolve(0);
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+}
+
 async function main(): Promise<number> {
   if (command === "scan") {
     const target = args[1] && !args[1].startsWith("--") ? args[1] : ".";
@@ -116,6 +170,10 @@ async function main(): Promise<number> {
     if (skipped && report.scope.kind === "repository") report.scope.skipped += skipped;
     emit(report);
     return report.verdict === "pass" ? 0 : report.verdict === "block" ? 1 : 2;
+  }
+  if (command === "watch") {
+    const target = args[1] && !args[1].startsWith("--") ? args[1] : ".";
+    return watchRepository(resolve(target));
   }
   if (command === "url") {
     if (!args[1]) throw new ScanInputError("USAGE", "Pass a link: signalward url <link>");
@@ -135,6 +193,42 @@ async function main(): Promise<number> {
     return result.valid ? 0 : 1;
   }
   if (command === "keys") {
+    if (args[1] === "rotate-reports") {
+      const currentKey = env.SIGNALWARD_REPORT_ENCRYPTION_KEY
+        ? Buffer.from(env.SIGNALWARD_REPORT_ENCRYPTION_KEY, "base64")
+        : resolveSecret(null, stateDir, "report-encryption-key");
+      if (currentKey.length !== 32) throw new Error("The active report-encryption key must be exactly 32 bytes.");
+      const retained = parseReportEncryptionKeyHistory(env.SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS);
+      if (retained.some((key) => key.equals(currentKey))) throw new Error("The active report-encryption key is already present in previous-key history.");
+      if (retained.length >= 3) throw new Error("Three previous report-encryption keys are already retained. Retire an old key only after every report encrypted with it has been re-encrypted or deleted.");
+      const history = Buffer.from(JSON.stringify({ keys: [currentKey, ...retained].map((key) => key.toString("base64")) })).toString("base64url");
+      console.log("# Deploy both values together. Previous keys are secrets and must stay in your secret manager.");
+      console.log("# Keep each old key until reports encrypted with it have been re-encrypted or deleted.");
+      console.log(`SIGNALWARD_REPORT_ENCRYPTION_KEY=${randomBytes(32).toString("base64")}`);
+      console.log(`SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS=${history}`);
+      return 0;
+    }
+    if (args[1] === "rotate-indicators") {
+      const currentVersion = env.SIGNALWARD_INDICATOR_KEY_VERSION || "k1";
+      if (!/^k\d{1,6}$/.test(currentVersion)) throw new Error("SIGNALWARD_INDICATOR_KEY_VERSION must look like k1.");
+      const currentKey = env.SIGNALWARD_INDICATOR_KEY
+        ? Buffer.from(env.SIGNALWARD_INDICATOR_KEY, "base64")
+        : resolveSecret(null, stateDir, "indicator-master");
+      if (currentKey.length !== 32) throw new Error("The active indicator key must be exactly 32 bytes.");
+      const retained = parseIndicatorKeyHistory(env.SIGNALWARD_PREVIOUS_INDICATOR_KEYS).filter((item) => item.version !== currentVersion);
+      if (retained.length >= 3) throw new Error("Three previous indicator keys are already retained. Retire a previous key only after its historical sightings and blocklist entries are no longer needed.");
+      const versions = [currentVersion, ...retained.map((item) => item.version)].map((version) => Number(version.slice(1)));
+      const nextVersion = `k${Math.max(...versions) + 1}`;
+      if (!/^k\d{1,6}$/.test(nextVersion)) throw new Error("Indicator key version space is exhausted; retire old version labels before rotating.");
+      const previous = [{ version: currentVersion, key: currentKey }, ...retained];
+      const history = Buffer.from(JSON.stringify({ keys: previous.map(({ version, key }) => ({ version, key: key.toString("base64") })) })).toString("base64url");
+      console.log("# Deploy all three values together. Previous keys are secrets and must stay in your secret manager.");
+      console.log("# Keep previous keys configured so old sightings and blocklist tags continue to match.");
+      console.log(`SIGNALWARD_INDICATOR_KEY=${randomBytes(32).toString("base64")}`);
+      console.log(`SIGNALWARD_INDICATOR_KEY_VERSION=${nextVersion}`);
+      console.log(`SIGNALWARD_PREVIOUS_INDICATOR_KEYS=${history}`);
+      return 0;
+    }
     if (args[1] === "rotate") {
       const current = trustedKeySet(signingKey()).keys[0]!;
       const previous = [current, ...previousSigningKeys().filter((key) => key.kid !== current.kid)];
@@ -151,11 +245,12 @@ async function main(): Promise<number> {
     console.log("# Paste into .env. Store production values in your secret manager, not in Git.");
     console.log(`SIGNALWARD_SESSION_SECRET=${randomBytes(32).toString("base64")}`);
     console.log(`SIGNALWARD_INDICATOR_KEY=${randomBytes(32).toString("base64")}`);
+    console.log(`SIGNALWARD_REPORT_ENCRYPTION_KEY=${randomBytes(32).toString("base64")}`);
     console.log(`SIGNALWARD_SIGNING_KEY=${privateKey.export({ format: "der", type: "pkcs8" }).toString("base64")}`);
     return 0;
   }
   if (command === "doctor") return doctor();
-  console.error("Usage:\n  signalward scan <path> [--json] [--out <dir>]\n  signalward url <link>\n  signalward verify <receipt.json> [--report <report.json>] [--keys <keys.json>]\n  signalward keys\n  signalward doctor");
+  console.error("Usage:\n  signalward scan <path> [--json] [--out <dir>]\n  signalward watch <path>\n  signalward url <link>\n  signalward verify <receipt.json> [--report <report.json>] [--keys <keys.json>]\n  signalward keys [rotate|rotate-indicators|rotate-reports]\n  signalward doctor");
   return 2;
 }
 

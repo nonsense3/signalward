@@ -9,11 +9,11 @@ import { issueReceipt, trustedKeySet, verifyReceipt, type SigningKey, type Trust
 import { briefFor, type AiConfig } from "./ai.ts";
 import { checkPassword, type AuthProvider, type AuthResult, type SessionData, type User } from "./auth.ts";
 import { AppError, EMAIL, badRequest, forbidden, notFound, rateLimited, unauthorized, validate } from "./errors.ts";
-import { RateLimiter, SECURITY_HEADERS, cookie, deriveIndicatorKey, open, readCookie, sameOrigin, seal } from "./security.ts";
+import { RateLimiter, SECURITY_HEADERS, cookie, deriveIndicatorKey, open, readCookie, sameOrigin, seal, type IndicatorMasterVersion } from "./security.ts";
 import { summarize, type Actor, type Store, type StoredReport } from "./store.ts";
 
-const KEY_VERSION = "k1";
-const SESSION_COOKIE = "sw_session";
+const DEV_SESSION_COOKIE = "sw_session";
+const SECURE_SESSION_COOKIE = "__Host-sw_session";
 const SESSION_DAYS = 7;
 
 export type ApiDeps = {
@@ -21,6 +21,8 @@ export type ApiDeps = {
   store: Store;
   cookieKey: Buffer;
   indicatorMaster: Buffer;
+  indicatorKeyVersion: string;
+  previousIndicatorKeys: IndicatorMasterVersion[];
   signingKey: SigningKey;
   previousSigningKeys: TrustedKey[];
   ai: AiConfig;
@@ -33,6 +35,7 @@ type Ctx = { rid: string; ip: string; setCookies: string[]; origin: string };
 type Authed = { session: SessionData; user: User; actor: Actor };
 
 export function createApi(deps: ApiDeps) {
+  const sessionCookie = deps.secureCookies ? SECURE_SESSION_COOKIE : DEV_SESSION_COOKIE;
   const limits = {
     ip: new RateLimiter(300, 60_000),
     scan: new RateLimiter(30, 60_000),
@@ -84,20 +87,22 @@ export function createApi(deps: ApiDeps) {
     const data: SessionData = { uid: result.user.id, email: result.user.email, iat: now, exp: now + SESSION_DAYS * 86400 };
     if (result.tokens) Object.assign(data, { at: result.tokens.accessToken, rt: result.tokens.refreshToken, atExp: result.tokens.expiresAt });
     if (result.sessionVersion !== undefined) data.sv = result.sessionVersion;
-    ctx.setCookies.push(cookie(SESSION_COOKIE, seal(deps.cookieKey, data), SESSION_DAYS * 86400, deps.secureCookies));
+    ctx.setCookies.push(cookie(sessionCookie, seal(deps.cookieKey, data), SESSION_DAYS * 86400, deps.secureCookies));
+    if (deps.secureCookies) ctx.setCookies.push(cookie(DEV_SESSION_COOKIE, "", 0, true));
   }
 
   function clearSession(ctx: Ctx) {
-    ctx.setCookies.push(cookie(SESSION_COOKIE, "", 0, deps.secureCookies));
+    ctx.setCookies.push(cookie(sessionCookie, "", 0, deps.secureCookies));
+    if (deps.secureCookies) ctx.setCookies.push(cookie(DEV_SESSION_COOKIE, "", 0, true));
   }
 
   /** Decrypt-only check used for page gating. The API always verifies fully. */
   function hasSession(request: IncomingMessage): boolean {
-    return Boolean(open<SessionData>(deps.cookieKey, readCookie(request, SESSION_COOKIE)));
+    return Boolean(open<SessionData>(deps.cookieKey, readCookie(request, sessionCookie)));
   }
 
   async function authenticate(request: IncomingMessage, ctx: Ctx): Promise<Authed> {
-    let session = open<SessionData>(deps.cookieKey, readCookie(request, SESSION_COOKIE));
+    let session = open<SessionData>(deps.cookieKey, readCookie(request, sessionCookie));
     if (!session) throw unauthorized();
     try {
       if (deps.auth.kind === "supabase" && session.rt && (session.atExp ?? 0) - Date.now() / 1000 < 90) {
@@ -114,10 +119,15 @@ export function createApi(deps: ApiDeps) {
   }
 
   function workspaceContext(actor: Actor): WorkspaceContext {
+    const versions = [
+      { version: deps.indicatorKeyVersion, master: deps.indicatorMaster },
+      ...deps.previousIndicatorKeys.map(({ version, key }) => ({ version, master: key })),
+    ];
     return {
       workspace: actor.userId,
-      indicatorKey: deriveIndicatorKey(deps.indicatorMaster, actor.userId, KEY_VERSION),
-      keyVersion: KEY_VERSION,
+      indicatorKey: deriveIndicatorKey(deps.indicatorMaster, actor.userId, deps.indicatorKeyVersion),
+      keyVersion: deps.indicatorKeyVersion,
+      indicatorKeys: versions.map(({ version, master }) => ({ key: deriveIndicatorKey(master, actor.userId, version), keyVersion: version })),
       lookup: (tags) => deps.store.lookupIndicators(actor, tags),
       record: (tags) => deps.store.recordIndicators(actor, tags),
     };
@@ -200,7 +210,7 @@ export function createApi(deps: ApiDeps) {
     }
 
     if (path === "/api/auth/signout" && method === "POST") {
-      const session = open<SessionData>(deps.cookieKey, readCookie(request, SESSION_COOKIE));
+      const session = open<SessionData>(deps.cookieKey, readCookie(request, sessionCookie));
       if (session) await deps.auth.signOut(session).catch(() => undefined);
       clearSession(ctx);
       return ok({ status: "signed_out" });
@@ -229,7 +239,7 @@ export function createApi(deps: ApiDeps) {
         user: { id: user.id, email: user.email, emailConfirmed: user.emailConfirmed, createdAt: user.createdAt },
         profile,
         session: { issuedAt: new Date(session.iat * 1000).toISOString(), expiresAt: new Date(session.exp * 1000).toISOString(), provider: deps.auth.kind },
-        keys: { indicator: `${KEY_VERSION} · HKDF per account`, signing: deps.signingKey.keyId },
+        keys: { indicator: `${deps.indicatorKeyVersion} · HKDF per account (${deps.previousIndicatorKeys.length} retained)`, signing: deps.signingKey.keyId },
       });
     }
 

@@ -22,12 +22,16 @@ try {
 }
 
 const sessionSecret = resolveSecret(config.secrets.session, config.stateDir, "session-secret");
+const reportEncryptionKey = resolveSecret(config.secrets.reportEncryption, config.stateDir, "report-encryption-key");
+const reportEncryptionKeys = [reportEncryptionKey, ...config.previousReportEncryptionKeys];
 const supabase = config.auth.supabase;
 const api = createApi({
-  auth: supabase ? new SupabaseAuth(supabase.url, supabase.anonKey) : new LocalAuth(config.stateDir),
-  store: supabase ? new SupabaseStore(supabase.url, supabase.anonKey) : new LocalStore(config.stateDir),
+  auth: supabase ? new SupabaseAuth(supabase.url, supabase.anonKey) : new LocalAuth(config.stateDir, reportEncryptionKeys),
+  store: supabase ? new SupabaseStore(supabase.url, supabase.anonKey, reportEncryptionKeys) : new LocalStore(config.stateDir, reportEncryptionKeys),
   cookieKey: deriveKey(sessionSecret, "signalward", "signalward/cookie/v1"),
   indicatorMaster: resolveSecret(config.secrets.indicator, config.stateDir, "indicator-master"),
+  indicatorKeyVersion: config.indicatorKeyVersion,
+  previousIndicatorKeys: config.previousIndicatorKeys,
   signingKey: loadSigningKey(config.stateDir, config.secrets.signing ? { SIGNALWARD_SIGNING_KEY: config.secrets.signing } : {}),
   previousSigningKeys: config.previousSigningKeys,
   ai: config.ai,

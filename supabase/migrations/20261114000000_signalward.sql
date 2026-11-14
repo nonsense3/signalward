@@ -22,6 +22,7 @@ create table if not exists public.reports (
   report jsonb not null,
   receipt jsonb not null,
   brief jsonb,
+  payload_encrypted boolean not null default false,
   created_at timestamptz not null default now()
 );
 create index if not exists reports_user_created on public.reports (user_id, created_at desc);
@@ -80,7 +81,7 @@ security invoker
 set search_path = ''
 as $$
   insert into public.indicator_sightings (user_id, tag, count, last_seen)
-  select auth.uid(), t, 1, now() from unnest(p_tags[1:50]) as t
+  select auth.uid(), t, 1, now() from unnest(p_tags[1:200]) as t
   on conflict (user_id, tag) do update set count = public.indicator_sightings.count + 1, last_seen = now();
 $$;
 revoke all on function public.record_sightings(text[]) from public, anon;

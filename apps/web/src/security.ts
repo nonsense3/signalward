@@ -3,6 +3,59 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
+export type IndicatorMasterVersion = { version: string; key: Buffer };
+
+/** Parse the base64url JSON secret history used to overlap report-encryption key rotations. */
+export function parseReportEncryptionKeyHistory(encoded: string | null | undefined): Buffer[] {
+  if (!encoded) return [];
+  if (encoded.length > 16_384 || !/^[A-Za-z0-9_-]+$/.test(encoded) || Buffer.from(encoded, "base64url").toString("base64url") !== encoded) {
+    throw new Error("SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS must be canonical base64url-encoded JSON.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS does not contain valid JSON.");
+  }
+  const entries = (parsed as { keys?: unknown } | null)?.keys;
+  if (!Array.isArray(entries) || entries.length > 3) throw new Error("SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS must contain at most 3 previous keys.");
+  const keys = entries.map((entry) => {
+    if (typeof entry !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(entry)) throw new Error("Previous report-encryption keys must be base64-encoded 32-byte keys.");
+    const key = Buffer.from(entry, "base64");
+    if (key.length !== 32 || key.toString("base64") !== entry) throw new Error("A previous report-encryption key is malformed.");
+    return key;
+  });
+  if (keys.some((key, index) => keys.slice(index + 1).some((other) => key.equals(other)))) throw new Error("Previous report-encryption keys must be unique.");
+  return keys;
+}
+
+/** Parse the base64url JSON secret history used to overlap indicator-key rotations. */
+export function parseIndicatorKeyHistory(encoded: string | null | undefined): IndicatorMasterVersion[] {
+  if (!encoded) return [];
+  if (encoded.length > 16_384 || !/^[A-Za-z0-9_-]+$/.test(encoded)) throw new Error("SIGNALWARD_PREVIOUS_INDICATOR_KEYS must be base64url-encoded JSON.");
+  if (Buffer.from(encoded, "base64url").toString("base64url") !== encoded) throw new Error("SIGNALWARD_PREVIOUS_INDICATOR_KEYS must use canonical base64url encoding.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("SIGNALWARD_PREVIOUS_INDICATOR_KEYS does not contain valid JSON.");
+  }
+  const entries = (parsed as { keys?: unknown } | null)?.keys;
+  if (!Array.isArray(entries) || entries.length > 3) throw new Error("SIGNALWARD_PREVIOUS_INDICATOR_KEYS must contain at most 3 previous keys.");
+  const versions = new Set<string>();
+  return entries.map((entry): IndicatorMasterVersion => {
+    if (!entry || typeof entry !== "object") throw new Error("A previous indicator key entry is invalid.");
+    const candidate = entry as Record<string, unknown>;
+    if (typeof candidate.version !== "string" || !/^k\d{1,6}$/.test(candidate.version) || typeof candidate.key !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(candidate.key)) {
+      throw new Error("Previous indicator keys need a k-number version and a base64-encoded 32-byte key.");
+    }
+    const key = Buffer.from(candidate.key, "base64");
+    if (key.length !== 32 || key.toString("base64") !== candidate.key || versions.has(candidate.version)) throw new Error("A previous indicator key is malformed or has a duplicate version.");
+    versions.add(candidate.version);
+    return { version: candidate.version, key };
+  });
+}
+
 /** Use a configured base64 secret, else a git-ignored development secret under the state directory. */
 export function resolveSecret(configured: string | null, stateDir: string, fileName: string): Buffer {
   if (configured) return Buffer.from(configured, "base64");

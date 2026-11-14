@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseTrustedKeyHistory, type TrustedKey } from "../../../packages/receipts/src/index.ts";
+import { parseIndicatorKeyHistory, parseReportEncryptionKeyHistory, type IndicatorMasterVersion } from "./security.ts";
 
 /**
  * Environment loading and strict validation. Every problem is collected and reported together so a
@@ -15,8 +16,11 @@ export type Config = {
   publicUrl: string | null;
   stateDir: string;
   secureCookies: boolean;
-  secrets: { session: string | null; indicator: string | null; signing: string | null };
+  secrets: { session: string | null; indicator: string | null; signing: string | null; reportEncryption: string | null };
   previousSigningKeys: TrustedKey[];
+  indicatorKeyVersion: string;
+  previousIndicatorKeys: IndicatorMasterVersion[];
+  previousReportEncryptionKeys: Buffer[];
   auth: {
     provider: AuthProviderKind;
     allowSignup: boolean;
@@ -106,6 +110,7 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
     session: blank(env.SIGNALWARD_SESSION_SECRET),
     indicator: blank(env.SIGNALWARD_INDICATOR_KEY),
     signing: blank(env.SIGNALWARD_SIGNING_KEY),
+    reportEncryption: blank(env.SIGNALWARD_REPORT_ENCRYPTION_KEY),
   };
   let previousSigningKeys: TrustedKey[] = [];
   try {
@@ -113,13 +118,34 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
   } catch (error) {
     problems.push(error instanceof Error ? error.message : "SIGNALWARD_PREVIOUS_SIGNING_KEYS is invalid.");
   }
-  for (const [name, value] of [["SIGNALWARD_SESSION_SECRET", secrets.session], ["SIGNALWARD_INDICATOR_KEY", secrets.indicator]] as const) {
+  let previousIndicatorKeys: IndicatorMasterVersion[] = [];
+  try {
+    previousIndicatorKeys = parseIndicatorKeyHistory(blank(env.SIGNALWARD_PREVIOUS_INDICATOR_KEYS));
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : "SIGNALWARD_PREVIOUS_INDICATOR_KEYS is invalid.");
+  }
+  let previousReportEncryptionKeys: Buffer[] = [];
+  try {
+    previousReportEncryptionKeys = parseReportEncryptionKeyHistory(blank(env.SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS));
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : "SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS is invalid.");
+  }
+  const indicatorKeyVersion = blank(env.SIGNALWARD_INDICATOR_KEY_VERSION) ?? "k1";
+  if (!/^k\d{1,6}$/.test(indicatorKeyVersion)) problems.push("SIGNALWARD_INDICATOR_KEY_VERSION must look like k1.");
+  if (previousIndicatorKeys.some((item) => item.version === indicatorKeyVersion)) problems.push("The active and previous indicator key versions must be unique.");
+  for (const [name, value] of [["SIGNALWARD_SESSION_SECRET", secrets.session], ["SIGNALWARD_INDICATOR_KEY", secrets.indicator], ["SIGNALWARD_REPORT_ENCRYPTION_KEY", secrets.reportEncryption]] as const) {
     if (value === null) {
       if (production) problems.push(`${name} is required in production. Generate one with: node apps/cli/signalward.ts keys`);
       else warnings.push(`${name} is empty; a local development value is generated under .signalward/.`);
     } else if (base64Bytes(value) < 32) {
       problems.push(`${name} must be at least 32 random bytes, base64 encoded.`);
     }
+  }
+  if (secrets.reportEncryption && base64Bytes(secrets.reportEncryption) !== 32) {
+    problems.push("SIGNALWARD_REPORT_ENCRYPTION_KEY must be exactly 32 random bytes, base64 encoded.");
+  }
+  if (secrets.reportEncryption && previousReportEncryptionKeys.some((key) => key.equals(Buffer.from(secrets.reportEncryption!, "base64")))) {
+    problems.push("The active and previous report-encryption keys must be unique.");
   }
   if (secrets.signing === null) {
     if (production) problems.push("SIGNALWARD_SIGNING_KEY is required in production (base64 PKCS#8 Ed25519).");
@@ -181,6 +207,9 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
     secureCookies: production || (publicUrl?.startsWith("https://") ?? false),
     secrets,
     previousSigningKeys,
+    indicatorKeyVersion,
+    previousIndicatorKeys,
+    previousReportEncryptionKeys,
     auth: { provider, allowSignup: allowSignupRaw === "true", supabase: provider === "supabase" ? supabase : null },
     ai: { apiKey: aiKey, model, timeoutMs },
     warnings,

@@ -53,7 +53,7 @@ All indicator values (emails, phones, UPI handles, wallets) are redacted and con
 
 ```sh
 cp .env.example .env               # then fill in the values below
-node apps/cli/signalward.ts keys   # prints the three SignalWard secrets
+node apps/cli/signalward.ts keys   # prints fresh SignalWard secrets
 node apps/cli/signalward.ts doctor # validates .env and checks Supabase / Gemini
 npm run dev
 ```
@@ -90,11 +90,14 @@ OAuth and magic link require Supabase. Enable the GitHub and Google providers in
 
 ```sh
 node apps/cli/signalward.ts scan .                         # scan a repository
+node apps/cli/signalward.ts watch .                        # rescan when repository files change
 node apps/cli/signalward.ts scan /path/to/repo --json --out ./artifacts
 node apps/cli/signalward.ts url "https://hdfc-secure-kyc.top/verify"   # zero-fetch URL check
 node apps/cli/signalward.ts verify ./artifacts/<id>.receipt.json \
   --report ./artifacts/<id>.report.json --keys ./artifacts/signalward-keys.json
 node apps/cli/signalward.ts keys     # generate SignalWard secrets
+node apps/cli/signalward.ts keys rotate-indicators # rotate HMAC tags with retained-key overlap
+node apps/cli/signalward.ts keys rotate-reports # rotate report encryption with retained-key overlap
 node apps/cli/signalward.ts doctor   # validate configuration and connectivity
 ```
 
@@ -159,8 +162,12 @@ signalward/
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `SIGNALWARD_SESSION_SECRET` | production | Encrypts session cookies (32+ bytes, base64) |
-| `SIGNALWARD_INDICATOR_KEY` | production | HKDF master for per-account indicator tags |
+| `SIGNALWARD_INDICATOR_KEY` | production | 32-byte HKDF master for per-account indicator tags |
+| `SIGNALWARD_INDICATOR_KEY_VERSION` | optional | Active indicator-key version (defaults to `k1`) |
+| `SIGNALWARD_PREVIOUS_INDICATOR_KEYS` | optional | Secret key history used to preserve indicator matches during rotations; maximum three previous keys |
 | `SIGNALWARD_SIGNING_KEY` | production | Base64 PKCS#8 DER Ed25519 receipt key |
+| `SIGNALWARD_REPORT_ENCRYPTION_KEY` | production | Exactly 32 random bytes, base64; encrypts stored report payloads with AES-256-GCM |
+| `SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS` | optional | Secret history of up to three previous report-encryption keys, used during rotation |
 | `SIGNALWARD_PREVIOUS_SIGNING_KEYS` | optional | Base64url JSON public-key history retained for receipt verification after key rotation |
 | `PUBLIC_URL` | production | Origin for auth redirects and secure cookies |
 | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | for Supabase | Auth + database (anon key only, never service-role) |
@@ -171,12 +178,16 @@ Run `node apps/cli/signalward.ts doctor` to check everything at once.
 
 Rotate the receipt signing key with `node apps/cli/signalward.ts keys rotate`. Deploy both values it prints: the replacement private key and the previous public-key history. The public key endpoint and offline key exports include the active key plus retained previous keys, so older receipts continue to verify. Keep retired public keys for as long as their receipts must remain verifiable; the configured history supports up to 32 retired keys.
 
+Rotate the indicator key with `node apps/cli/signalward.ts keys rotate-indicators`. Deploy all three values it prints together. During overlap, SignalWard reads and records tags under the active key and retained previous keys; this preserves existing sightings and blocklist matches. Previous indicator keys are secrets. Removing one ends matching for tags created with that version, so retain it until those records are deliberately retired.
+
+Stored report payloads and local-account records use AES-256-GCM. Local-account encryption derives a separate key from the report key with HKDF and a distinct context. Back up `SIGNALWARD_REPORT_ENCRYPTION_KEY` securely; reports or accounts encrypted with lost active and retained keys cannot be recovered. Rotate with `node apps/cli/signalward.ts keys rotate-reports` and deploy both values it prints. Local reports and account records are re-encrypted under the active key on startup; Supabase reports are re-encrypted with the active key when opened or exported. Keep prior keys until all reports/accounts encrypted with them have been re-encrypted or deleted. New Supabase reports are encrypted at the application layer. Previously stored Supabase rows remain marked as legacy plaintext until opened or exported through the app's one-way encryption migration.
+
 ---
 
 ## Supabase setup
 
 1. Create a project and copy its URL and anon key into `.env`.
-2. Run `supabase/migrations/20261114000000_signalward.sql` in the SQL editor. It creates `profiles`, `reports`, `indicator_sightings` and `blocklist`, all with row-level security.
+2. Run every SQL file in `supabase/migrations/` in timestamp order. This creates `profiles`, `reports`, `indicator_sightings` and `blocklist`, enables row-level security, and adds report encryption and key-rotation support.
 3. Enable the **GitHub** and **Google** auth providers, and add `<PUBLIC_URL>/auth/callback` to the redirect URLs.
 4. Run `node apps/cli/signalward.ts doctor` to confirm the tables exist.
 

@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { AppError, unauthorized, unavailable } from "./errors.ts";
+import { deriveKey } from "./security.ts";
+import { decryptJson, encryptJson, isEncryptedJson, isEncryptedWithKey } from "./storage-crypto.ts";
 
 const scrypt = promisify(scryptCb) as (password: string, salt: Buffer, keylen: number, options: { N: number; r: number; p: number; maxmem: number }) => Promise<Buffer>;
 
@@ -182,16 +184,29 @@ export class LocalAuth implements AuthProvider {
   #file: string;
   #users: LocalRecord[];
   #dummySalt = randomBytes(16);
+  #storageKeys: Buffer[];
 
-  constructor(stateDir: string) {
+  constructor(stateDir: string, encryptionKeys: Buffer[]) {
     mkdirSync(stateDir, { recursive: true });
     this.#file = join(stateDir, "users.json");
-    this.#users = existsSync(this.#file) ? (JSON.parse(readFileSync(this.#file, "utf8")) as { users: LocalRecord[] }).users : [];
+    this.#storageKeys = encryptionKeys.map((key) => deriveKey(key, "signalward", "signalward/local-auth-storage/v1"));
+    if (!existsSync(this.#file)) {
+      this.#users = [];
+      return;
+    }
+    const stored: unknown = JSON.parse(readFileSync(this.#file, "utf8"));
+    if (isEncryptedJson(stored)) {
+      this.#users = decryptJson<{ users: LocalRecord[] }>(this.#storageKeys, stored, { required: true, context: "local-auth-users-v1" }).users;
+      if (!isEncryptedWithKey(stored, this.#storageKeys[0]!)) this.#save();
+    } else {
+      this.#users = (stored as { users: LocalRecord[] }).users;
+      this.#save();
+    }
   }
 
   #save() {
     const temp = `${this.#file}.${process.pid}.tmp`;
-    writeFileSync(temp, JSON.stringify({ users: this.#users }, null, 2), { mode: 0o600 });
+    writeFileSync(temp, JSON.stringify(encryptJson(this.#storageKeys[0]!, { users: this.#users }, "local-auth-users-v1")), { mode: 0o600 });
     renameSync(temp, this.#file);
   }
 
