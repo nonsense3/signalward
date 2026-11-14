@@ -3,11 +3,18 @@
   "private": true,
   "type": "module",
   "version": "0.2.0",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "node apps/web/server.mjs",
     "start": "node apps/web/server.mjs",
     "scan": "node apps/cli/signalward.ts scan",
-    "test": "node --test tests/policy.test.ts"
+    "test": "node --test tests/policy.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3"
   }
 }

@@ -124,7 +124,7 @@ void main(){
   float stiffness = mix(3.6, 7.6, seed) * (1.0 - uIntro * 0.8);
   vec3 force = (target - pos) * stiffness;
   // Steady by default: gentle flow, with turbulence rising only during morphs, scroll and the intro.
-  force += curl(pos * 0.8 + vec3(0.0, 0.0, uTime * 0.06)) * (0.07 + uEnergy * 0.7 + streaming * 0.22 + uIntro * 2.2);
+  force += curl(pos * 0.8 + vec3(0.0, 0.0, uTime * 0.06)) * (0.035 + uEnergy * 0.3 + streaming * 0.22 + uIntro * 2.2);
   vec3 toP = pos - uRayO;
   vec3 d = pos - (uRayO + uRayD * dot(toP, uRayD));
   float influence = exp(-dot(d, d) * 5.0) * uPointer;
@@ -144,6 +144,7 @@ uniform sampler2D uVel;
 uniform mat4 uProj, uView;
 uniform vec2 uShift;
 uniform float uSize, uWidth, uLight;
+uniform vec3 uHue;
 out vec3 vColor;
 out float vAlpha;
 void main(){
@@ -157,9 +158,11 @@ void main(){
   float glow = smoothstep(0.15, 1.8, length(V.xyz));
   gl_PointSize = clamp(uSize * (1.0 + glow * 0.5) / max(-mv.z, 0.1), 1.0, 22.0);
   // Dark: emitted light. Light: absorbance (1 - ink colour), so additive blending darkens toward the ink.
-  vec3 emit = mix(mix(vec3(0.32, 0.27, 0.78), vec3(0.61, 0.55, 1.0), smoothstep(0.0, 0.6, glow + 0.35)), vec3(0.96, 0.95, 0.93), smoothstep(0.45, 1.0, glow));
+  // uHue is the formation's palette (one per chapter); findings (V.w) stay coral in every palette.
+  vec3 emit = mix(mix(uHue * 0.55, uHue, smoothstep(0.0, 0.6, glow + 0.35)), vec3(0.96, 0.95, 0.93), smoothstep(0.45, 1.0, glow));
   emit = mix(emit, vec3(1.0, 0.47, 0.4), V.w);
-  vec3 ink = mix(vec3(0.23, 0.17, 1.0), vec3(0.05, 0.04, 0.2), smoothstep(0.5, 1.0, glow));
+  vec3 deep = pow(uHue, vec3(2.4));
+  vec3 ink = mix(deep, deep * 0.2, smoothstep(0.5, 1.0, glow));
   ink = mix(ink, vec3(0.92, 0.25, 0.25), V.w);
   vColor = mix(emit, (1.0 - ink) * 0.55, uLight);
   vAlpha = P.w * (0.5 + glow * 0.6 + V.w * 0.6);
@@ -197,17 +200,19 @@ in vec3 vNormal;
 in vec3 vWorld;
 uniform vec3 uEye;
 uniform float uOpacity, uLine, uTime, uLight;
+uniform vec3 uHue;
 out vec4 outColor;
 void main(){
-  if (uLine > 0.5) { outColor = vec4(mix(vec3(0.2), vec3(0.16, 0.15, 0.1), uLight) * uOpacity, 1.0); return; }
+  vec3 deep = pow(uHue, vec3(2.0));
+  if (uLine > 0.5) { outColor = vec4(mix(uHue * 0.32, (1.0 - deep) * 0.2 + 0.06, uLight) * uOpacity, 1.0); return; }
   vec3 n = normalize(vNormal);
   vec3 v = normalize(uEye - vWorld);
   float fres = pow(1.0 - abs(dot(n, v)), 2.6);
   float film = 0.5 + 0.5 * sin(dot(n, v) * 9.0 + uTime * 0.4);
-  // Thin-film dispersion: the hue drifts across the face with the viewing angle.
-  vec3 tint = mix(vec3(0.45, 0.4, 0.95), vec3(0.75, 0.7, 1.0), film);
+  // Thin-film dispersion around the formation's hue: it drifts across the face with the viewing angle.
+  vec3 tint = mix(uHue * 0.72, mix(uHue, vec3(1.0), 0.3), film);
   vec3 emitted = tint * fres * 0.42 + vec3(0.07, 0.07, 0.11) * 0.35;
-  vec3 absorbed = (1.0 - mix(vec3(0.35, 0.3, 1.0), vec3(0.7, 0.68, 1.0), film)) * fres * 0.5 + vec3(0.025);
+  vec3 absorbed = (1.0 - mix(deep * 0.6 + 0.08, mix(uHue, vec3(1.0), 0.3), film)) * fres * 0.5 + vec3(0.025);
   outColor = vec4(mix(emitted, absorbed, uLight) * uOpacity, 1.0);
 }`;
 
@@ -370,20 +375,69 @@ function prismMesh() {
   for (const y of [-h, h]) for (const p of tri) push(faces, [p[0], y, p[1]], [0, Math.sign(y), 0]);
   return { faces: new Float32Array(faces), edges: new Float32Array(edges) };
 }
-function boxMesh() {
+/** Convex polyhedron from vertices and polygon index lists: flat-shaded faces plus outline edges. */
+function polyhedron(verts, polys) {
   const faces = [], edges = [];
   const push = (list, p, n) => list.push(p[0], p[1], p[2], n[0], n[1], n[2]);
-  for (const [a, b, c] of [[0, 1, 2], [1, 2, 0], [2, 0, 1]]) {
-    for (const sign of [-1, 1]) {
-      const n = [0, 0, 0]; n[a] = sign;
-      const corner = (u, v) => { const p = [0, 0, 0]; p[a] = sign; p[b] = u; p[c] = v; return p; };
-      const quad = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
-      for (const k of [0, 1, 2, 0, 2, 3]) push(faces, quad[k], n);
-      for (const [p, q] of [[0, 1], [1, 2], [2, 3], [3, 0]]) { push(edges, quad[p], n); push(edges, quad[q], n); }
-    }
+  for (const poly of polys) {
+    const pts = poly.map((i) => verts[i]);
+    const centre = pts.reduce((c, p) => [c[0] + p[0] / pts.length, c[1] + p[1] / pts.length, c[2] + p[2] / pts.length], [0, 0, 0]);
+    let n = norm(cross(sub(pts[1], pts[0]), sub(pts[2], pts[0])));
+    if (dot(n, centre) < 0) n = [-n[0], -n[1], -n[2]]; // outward, since every container is centred
+    for (let k = 1; k < pts.length - 1; k++) for (const p of [pts[0], pts[k], pts[k + 1]]) push(faces, p, n);
+    for (let k = 0; k < pts.length; k++) { push(edges, pts[k], n); push(edges, pts[(k + 1) % pts.length], n); }
   }
   return { faces: new Float32Array(faces), edges: new Float32Array(edges) };
 }
+function prismPoly(sides, radius, half, twist = 0) {
+  const verts = [];
+  for (const y of [-half, half]) for (let i = 0; i < sides; i++) {
+    const a = twist + (i / sides) * Math.PI * 2;
+    verts.push([Math.cos(a) * radius, y, Math.sin(a) * radius]);
+  }
+  const polys = [[...Array(sides).keys()], [...Array(sides).keys()].map((i) => sides + i)];
+  for (let i = 0; i < sides; i++) polys.push([i, (i + 1) % sides, sides + ((i + 1) % sides), sides + i]);
+  return polyhedron(verts, polys);
+}
+function boxPoly(x, y, z) {
+  const v = [];
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) v.push([sx * x, sy * y, sz * z]);
+  return polyhedron(v, [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]]);
+}
+function octaPoly(r) {
+  const v = [[r, 0, 0], [-r, 0, 0], [0, r, 0], [0, -r, 0], [0, 0, r], [0, 0, -r]];
+  return polyhedron(v, [[0, 2, 4], [0, 4, 3], [0, 3, 5], [0, 5, 2], [1, 4, 2], [1, 3, 4], [1, 5, 3], [1, 2, 5]]);
+}
+function icosaPoly(r) {
+  const t = (1 + Math.sqrt(5)) / 2, s = r / Math.hypot(1, t);
+  const v = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]].map((p) => p.map((c) => c * s));
+  return polyhedron(v, [[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11], [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+    [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]]);
+}
+/** One distinct glass container per chapter formation (shape id 1..7); index 0 is unused (hero). */
+function containerMeshes() {
+  return [
+    null,
+    prismPoly(6, 1.2, 0.5, Math.PI / 6), // detection: a low hexagonal drum around the radar sweep
+    boxPoly(1, 1, 1),                     // zero trust: a sealed cube around the lattice
+    octaPoly(1.45),                       // privacy: an octahedron around the knot
+    boxPoly(1.15, 1.15, 0.3),             // identity: a thin card for the fingerprint
+    prismPoly(5, 1.15, 0.85, -Math.PI / 2), // fraud: a pentagonal column around the shield
+    icosaPoly(1.4),                       // evidence: a faceted seal around the receipt
+    prismPoly(8, 1.25, 0.95, Math.PI / 8),  // globe
+  ];
+}
+/** Formation palettes (linear RGB), indexed like the shapes: 0 is the hero stream. */
+const HUES = [
+  [0.61, 0.55, 1.0],  // hero: violet
+  [0.4, 0.8, 1.0],    // detection: sky
+  [0.78, 0.55, 1.0],  // zero trust: purple
+  [0.42, 1.0, 0.78],  // privacy: mint
+  [1.0, 0.6, 0.88],   // identity: pink
+  [1.0, 0.74, 0.36],  // fraud: amber
+  [0.6, 1.0, 0.5],    // evidence: green
+  [0.61, 0.55, 1.0],  // globe: violet
+];
 
 function texture(gl, w, h, internal, format, type, data, filter) {
   const t = gl.createTexture();
@@ -409,15 +463,17 @@ function doubleTarget(gl, w, h, filter) {
 
 /**
  * @param {HTMLCanvasElement} canvas
- * @param {{ compact?: boolean, shape?: number, prisms?: boolean, light?: boolean, fluid?: boolean }} options
+ * @param {{ compact?: boolean, shape?: number, prisms?: boolean, light?: boolean, fluid?: boolean, tinted?: boolean }} options
+ *   tinted: give each formation its own palette (landing chapters); false keeps the brand violet.
  */
-export function startScene(canvas, { compact = false, shape = 0, prisms = true, light = false, fluid = true } = {}) {
+export function startScene(canvas, { compact = false, shape = 0, prisms = true, light = false, fluid = true, tinted = true } = {}) {
   const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, depth: false, powerPreference: "high-performance", preserveDrawingBuffer: false });
   if (!gl) throw new Error("WebGL2 unavailable");
   if (!gl.getExtension("EXT_color_buffer_float")) throw new Error("Float render targets unavailable");
   gl.getExtension("OES_texture_float_linear");
 
-  const SIZE = compact ? 64 : 128;
+  // 6,400 particles on desktop, 2,304 compact. Enough to read each formation without a noisy fill.
+  const SIZE = compact ? 48 : 80;
   const COUNT = SIZE * SIZE;
 
   const sim = program(gl, QUAD_VS, SIM_FS);
@@ -448,9 +504,9 @@ export function startScene(canvas, { compact = false, shape = 0, prisms = true, 
     if (nrm >= 0) { gl.enableVertexAttribArray(nrm); gl.vertexAttribPointer(nrm, 3, gl.FLOAT, false, 24, 12); }
     return { vao, count: data.length / 6 };
   }
-  const prism = prismMesh(), box = boxMesh();
+  const prism = prismMesh();
   const prismFaces = meshVao(prism.faces), prismEdges = meshVao(prism.edges);
-  const boxFaces = meshVao(box.faces), boxEdges = meshVao(box.edges);
+  const containers = containerMeshes().map((mesh) => mesh && { faces: meshVao(mesh.faces), edges: meshVao(mesh.edges) });
   const emptyVao = gl.createVertexArray();
 
   // Particle state.
@@ -506,9 +562,12 @@ export function startScene(canvas, { compact = false, shape = 0, prisms = true, 
 
   const state = {
     shapeA: shape, shapeB: shape, mix: 0,
-    caseBlend: prisms ? 0 : 0, prismBlend: prisms ? 1 : 0,
+    // Glass containers are off: the formations read cleaner on their own (Lusion-style open frame).
+    cases: false, caseBlend: 0, prismBlend: prisms ? 1 : 0,
     energy: 0, aberration: 0, intro: 1,
     light: light ? 1 : 0, lightTarget: light ? 1 : 0,
+    // Palette and glass container follow the incoming formation (shapeB) and crossfade on change.
+    hue: [...HUES[tinted ? shape : 0]], caseFrom: shape, caseTo: shape, caseMix: 1,
     /** Where the scene sits: NDC centre and height fraction of the canvas, plus an optional CSS-px clip. */
     view: { cx: 0, cy: 0, h: 1 }, clip: null,
     pointer: { x: 0, y: 0, vx: 0, vy: 0, active: 0, target: 0, moved: false, dx: 0, dy: 0 },
@@ -607,6 +666,15 @@ export function startScene(canvas, { compact = false, shape = 0, prisms = true, 
 
     state.intro = Math.max(0, state.intro - dt * 0.55);
     state.light += (state.lightTarget - state.light) * Math.min(1, dt * 5);
+    const goal = HUES[tinted ? state.shapeB : 0] ?? HUES[0];
+    for (let i = 0; i < 3; i++) state.hue[i] += (goal[i] - state.hue[i]) * Math.min(1, dt * 2.4);
+    if (state.shapeB !== state.caseTo) {
+      // Mid-fade retarget: keep whichever container is more visible as the outgoing one.
+      if (state.caseMix > 0.5) state.caseFrom = state.caseTo;
+      state.caseTo = state.shapeB;
+      state.caseMix = 0;
+    }
+    state.caseMix = Math.min(1, state.caseMix + dt / 0.9);
     const p = state.pointer;
     p.active += (p.target - p.active) * Math.min(1, dt * 4);
     const v = state.view;
@@ -680,6 +748,7 @@ export function startScene(canvas, { compact = false, shape = 0, prisms = true, 
     gl.uniform3fv(glass.u.uEye, eye);
     gl.uniform1f(glass.u.uTime, time);
     gl.uniform1f(glass.u.uLight, state.light);
+    gl.uniform3fv(glass.u.uHue, state.hue);
     const drawMesh = (faces, edges, m, opacity) => {
       gl.uniformMatrix4fv(glass.u.uModel, false, m);
       gl.uniform1f(glass.u.uOpacity, opacity);
@@ -693,7 +762,16 @@ export function startScene(canvas, { compact = false, shape = 0, prisms = true, 
       const spread = 0.94 * state.prismBlend;
       for (const k of [-1, 0, 1]) drawMesh(prismFaces, prismEdges, model(k * spread, k * 0.06, k * -0.12, 0.35 + k * 0.42 + time * 0.07, 1), prismOpacity);
     }
-    if (state.caseBlend > 0.01) drawMesh(boxFaces, boxEdges, model(0, 0, 0, time * 0.05 + 0.6, 1.3 + (1 - state.caseBlend) * 0.35), state.caseBlend * 0.45);
+    if (state.cases && state.caseBlend > 0.01) {
+      const ease = state.caseMix * state.caseMix * (3 - 2 * state.caseMix);
+      const drawCase = (id, amount, grow) => {
+        const mesh = containers[id];
+        if (!mesh || amount < 0.01) return;
+        drawMesh(mesh.faces, mesh.edges, model(0, 0, 0, time * 0.05 + 0.6 + id * 0.35, 1.3 + (1 - state.caseBlend) * 0.35 + grow), state.caseBlend * 0.45 * amount);
+      };
+      drawCase(state.caseFrom, 1 - ease, ease * 0.25);
+      drawCase(state.caseTo, ease, (1 - ease) * -0.2);
+    }
 
     gl.useProgram(points.p);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, read.pos); gl.uniform1i(points.u.uPos, 0);
@@ -701,9 +779,11 @@ export function startScene(canvas, { compact = false, shape = 0, prisms = true, 
     gl.uniformMatrix4fv(points.u.uProj, false, proj);
     gl.uniformMatrix4fv(points.u.uView, false, view.m);
     gl.uniform2fv(points.u.uShift, shift);
-    gl.uniform1f(points.u.uSize, (compact ? 24 : 26) * (ph / 900));
+    // Fewer particles, so each one is drawn a little larger to keep the formations solid.
+    gl.uniform1f(points.u.uSize, (compact ? 30 : 24) * (ph / 900));
     gl.uniform1f(points.u.uWidth, SIZE);
     gl.uniform1f(points.u.uLight, state.light);
+    gl.uniform3fv(points.u.uHue, state.hue);
     gl.bindVertexArray(emptyVao);
     gl.drawArrays(gl.POINTS, 0, drawCount);
 

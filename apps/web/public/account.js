@@ -86,7 +86,7 @@ async function loadStats() {
       return h("div", { class: "list__row" }, h("span", { class: "kind", text: KIND_SHORT[item.kind] }),
         h("div", { css: { "min-width": "0" } }, h("b", { text: item.summary }), h("span", { text: `${fmtTime(item.createdAt)} · ${item.findings} findings` })),
         h("span", { class: `tag tag--${verdict.tone}`, text: verdict.label }));
-    }) : [h("div", { class: "empty", css: { "min-height": "10rem" } }, h("b", { text: "No reports yet" }), h("a", { class: "pill pill--dark pill--sm", href: "/scan", text: "Run your first scan" }))]));
+    }) : [h("div", { class: "empty", css: { "min-height": "10rem" } }, h("b", { text: "No reports yet" }), h("a", { class: "pill pill--dark pill--sm", href: "/scan" }, "Run your first scan", h("span", { class: "arrow", "aria-hidden": "true" })))]));
   } catch (error) {
     reportError(error);
   }
@@ -162,7 +162,7 @@ async function identityArt() {
   const canvas = $("canvas", card);
   try {
     const { startScene } = await import("./scene.js");
-    const scene = startScene(canvas, { compact: true, shape: 4, prisms: false, light: currentTheme() === "light" });
+    const scene = startScene(canvas, { compact: true, shape: 4, prisms: false, tinted: false, light: currentTheme() === "light" });
     scene.state.view.h = 0.8;
     scene.state.view.cy = 0.12;
     scene.resume();

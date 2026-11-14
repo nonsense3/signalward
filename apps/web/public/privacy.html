@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#e9eaef">
+  <meta name="description" content="What SignalWard collects, why, where it is processed, and how to export or erase it.">
+  <title>Privacy policy — SignalWard</title>
+  <link rel="icon" href="/favicon-light.png" type="image/png" sizes="64x64" data-favicon>
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/legal.css">
+  <script type="module" src="/legal.js"></script>
+</head>
+<body class="app">
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="header" data-header>
+    <a class="brand" href="/" aria-label="SignalWard home"><span class="brand__mark" aria-hidden="true"></span>SignalWard</a>
+    <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch between light and dark theme"></button>
+    <a class="pill pill--dark hide-sm" href="/scan">Console<span class="arrow" aria-hidden="true"></span></a>
+    <button class="pill menu-btn" type="button" data-menu aria-expanded="false" aria-controls="menu">Menu <span class="dots" aria-hidden="true"><i></i><i></i></span></button>
+  </header>
+  <main id="main">
+    <article class="legal">
+      <div class="legal__intro">
+        <span class="eyebrow">Privacy policy</span>
+        <h1>What we keep, and why.</h1>
+        <p>Last updated 14 November 2026.</p>
+      </div>
+
+      <section>
+        <h2>Account data</h2>
+        <p>When you create an account we store your email address, the display name you choose, and optional profile fields (role, organisation, avatar colour). Sign-in is handled by Supabase Auth. If you sign in with GitHub or Google, we receive your email address and basic profile from that provider.</p>
+      </section>
+
+      <section>
+        <h2>What you scan</h2>
+        <ul>
+          <li><b>Repositories.</b> We download a snapshot from GitHub, scan it in memory and keep only the redacted report. Source files are not stored. A GitHub token you enter is used for that download only and is not saved.</li>
+          <li><b>Messages.</b> The message text is scanned and then discarded. Phone numbers, UPI IDs, IBANs and wallet addresses are turned into one-way HMAC tags specific to your account, so repeats can be matched without keeping the raw values.</li>
+          <li><b>Links.</b> We never open the link. With link intelligence enabled, we look up the domain's registration date over RDAP.</li>
+        </ul>
+        <p>Reports are encrypted before they are stored, and row-level security limits every record to its owner.</p>
+      </section>
+
+      <section>
+        <h2>Service providers</h2>
+        <ul>
+          <li><b>Supabase</b> stores accounts, encrypted reports, indicator tags and blocklists.</li>
+          <li><b>Cloudflare</b> hosts the site and processes requests.</li>
+          <li><b>Google Gemini</b> may write the short report summary. It receives rule IDs, severities and similar facts, plus the hostname for link scans. It never receives file contents, message text or evidence values.</li>
+          <li><b>GitHub</b> and <b>RDAP registries</b> receive the repository or domain you ask us to check.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Cookies and storage</h2>
+        <p>We set one encrypted, HttpOnly session cookie to keep you signed in. Your browser stores your theme choice locally. There are no advertising or tracking cookies.</p>
+      </section>
+
+      <section>
+        <h2>Your controls</h2>
+        <p>From your <a href="/account#settings">profile</a> you can export everything as JSON or erase all reports, indicator history and blocklist entries. Erasing cannot be undone. Signed receipts you have already shared stay verifiable, because they contain only a digest and signature.</p>
+      </section>
+
+      <section>
+        <h2>Contact</h2>
+        <p>Questions about this policy or your data: open an issue at <a href="https://github.com/nonsense3/signalward" rel="noopener">github.com/nonsense3/signalward</a>.</p>
+      </section>
+    </article>
+  </main>
+</body>
+</html>

@@ -15,7 +15,10 @@ function fill(count, seed, generator) {
   const out = new Float32Array(count * 4);
   const random = rng(seed);
   for (let i = 0; i < count; i++) {
-    const [x, y, z, flag = 0] = generator(i / count, random, i);
+    // Golden-ratio sequence instead of i / count: every prefix of the particle list samples every part
+    // of the shape, so drawing fewer particles (adaptive quality) thins the formation evenly.
+    const t = (i * 0.6180339887498949) % 1;
+    const [x, y, z, flag = 0] = generator(t, random, i);
     out.set([x, y, z, flag], i * 4);
   }
   return out;
@@ -63,16 +66,14 @@ function lattice(t, random) {
   const sizes = [1.2, 0.82, 0.44];
   const level = t < 0.45 ? 0 : t < 0.78 ? 1 : 2;
   const s = sizes[level];
-  if (random() < 0.12) {
-    const corner = [random() < 0.5 ? -s : s, random() < 0.5 ? -s : s, random() < 0.5 ? -s : s];
-    return corner.map((value) => value + gauss(random) * 0.04);
-  }
-  const axis = Math.floor(random() * 3);
   const p = [random() < 0.5 ? -s : s, random() < 0.5 ? -s : s, random() < 0.5 ? -s : s];
-  p[axis] = (random() * 2 - 1) * s;
+  // Most particles trace the cube edges; a few gather on the corners as gate nodes.
+  const corner = random() < 0.06;
+  if (!corner) p[Math.floor(random() * 3)] = (random() * 2 - 1) * s;
+  const jitter = corner ? 0.025 : 0.008;
   const spin = level * 0.42;
   const c = Math.cos(spin), q = Math.sin(spin);
-  return [p[0] * c - p[2] * q + gauss(random) * 0.008, p[1] + gauss(random) * 0.008, p[0] * q + p[2] * c + gauss(random) * 0.008];
+  return [p[0] * c - p[2] * q + gauss(random) * jitter, p[1] + gauss(random) * jitter, p[0] * q + p[2] * c + gauss(random) * jitter];
 }
 
 /** Privacy-preserving computation: a trefoil knot. Values pass through, their order is kept, contents stay sealed. */

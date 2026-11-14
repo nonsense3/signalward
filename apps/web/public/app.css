@@ -51,6 +51,7 @@
 .verdict--danger{--tone:var(--danger);--soft:var(--danger-soft)}
 .verdict--warning{--tone:var(--warning);--soft:var(--warning-soft)}
 .verdict--success{--tone:var(--success);--soft:var(--success-soft)}
+.scan-error{margin:.75rem 0 0;padding:.65rem .85rem;border-inline-start:2px solid var(--danger);border-radius:.35rem;background:var(--danger-soft);color:var(--ink);font-size:.875rem}
 .verdict__top{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;position:relative}
 .verdict__label{font-family:var(--display);font-weight:640;font-stretch:108%;font-size:clamp(2.4rem,4.6vw,3.8rem);letter-spacing:-.04em;line-height:.95;color:var(--tone);margin:0}
 .verdict__kind{font-family:var(--mono);font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:.5rem}
@@ -104,8 +105,9 @@
 .receipt-row dl{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:.25rem .9rem;font-size:.78rem}
 .receipt-row dt{color:var(--dim);font-family:var(--mono);font-size:.66rem;text-transform:uppercase;letter-spacing:.05em;padding-top:.1rem}
 .receipt-row dd{margin:0;font-family:var(--mono);font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.seal{width:3.4rem;height:3.4rem;border-radius:50%;display:grid;place-items:center;background:conic-gradient(from 90deg,var(--accent),color-mix(in srgb,var(--accent) 30%,var(--surface)),var(--accent));animation:spin 12s linear infinite}
-.seal::after{content:"✓";width:2.6rem;height:2.6rem;border-radius:50%;display:grid;place-items:center;background:var(--surface);color:var(--accent);font-weight:800}
+/* Static seal: a thin ring with a drawn check (no font glyph, nothing rotates). */
+.seal{position:relative;width:3rem;height:3rem;border-radius:50%;border:1.5px solid color-mix(in srgb,var(--success) 55%,transparent);background:color-mix(in srgb,var(--success) 10%,transparent)}
+.seal::after{content:"";position:absolute;left:50%;top:46%;width:.5rem;height:.95rem;border:solid var(--success);border-width:0 2px 2px 0;transform:translate(-50%,-50%) rotate(45deg)}
 @keyframes spin{to{transform:rotate(1turn)}}
 
 /* ---------- Tables and lists ---------- */

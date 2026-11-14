@@ -58,7 +58,8 @@ export function mountFooterLogo(container, { text = "SignalWard" } = {}) {
     for (let y = 0; y < off.height; y += step) {
       for (let x = 0; x < off.width; x += step) {
         if (data[(y * off.width + x) * 4 + 3] > 130) {
-          const reused = next.length < particles.length ? particles[next.length] : { x: Math.random() * w, y: h * (Math.random() < 0.5 ? -0.2 : 1.2), vx: 0, vy: 0 };
+          // New particles start on their letterform: the wordmark is simply there when it scrolls in.
+          const reused = next.length < particles.length ? particles[next.length] : { x: x * sx, y: y * sy, vx: 0, vy: 0 };
           reused.tx = x * sx;
           reused.ty = y * sy;
           reused.rand = reused.rand ?? Math.random();
@@ -105,15 +106,19 @@ export function mountFooterLogo(container, { text = "SignalWard" } = {}) {
     ctx.globalAlpha = 1;
   }
 
+  // The cursor only disturbs the letters while it is over the wordmark (hover). Scrolling, or a
+  // pointer elsewhere on the page, never moves them.
+  const release = () => { pointer.x = pointer.y = -9999; pointer.strength = 0; };
   function setPointer(event) {
+    if (event.pointerType === "touch") return;
     const rect = canvas.getBoundingClientRect();
-    const inside = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
     pointer.x = event.clientX - rect.left;
     pointer.y = event.clientY - rect.top;
-    if (inside) pointer.strength = Math.min(1.4, pointer.strength + 0.08);
+    pointer.strength = Math.min(1, pointer.strength + 0.05);
   }
-  addEventListener("pointermove", setPointer, { passive: true });
-  addEventListener("pointerdown", (event) => { setPointer(event); pointer.strength = 1.4; }, { passive: true });
+  canvas.addEventListener("pointermove", setPointer, { passive: true });
+  canvas.addEventListener("pointerleave", release, { passive: true });
+  addEventListener("scroll", release, { passive: true });
 
   const start = () => { if (!raf) { raf = requestAnimationFrame(frame); } };
   const stop = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } };

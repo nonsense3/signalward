@@ -296,7 +296,7 @@ boot();
   const canvas = $(".auth-art canvas");
   try {
     const { startScene } = await import("./scene.js");
-    const scene = startScene(canvas, { compact: true, shape: 5, prisms: false, light: currentTheme() === "light" });
+    const scene = startScene(canvas, { compact: true, shape: 5, prisms: false, tinted: false, light: currentTheme() === "light" });
     scene.state.view.h = 0.92;
     scene.resume();
     addEventListener("themechange", (event) => scene.setLight(event.detail === "light"));

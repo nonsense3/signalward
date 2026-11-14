@@ -109,6 +109,11 @@ export type ReportScope =
   | { kind: "url"; normalized: string; registrableDomain: string | null };
 
 export type Report = {
+  urlModel?: { modelVersion: string; score: number; advisory: true };
+  urlDataset?: { labels: string[] };
+  urlNotice?: "dataset_miss" | "dataset_conflict" | "dataset_unavailable" | "gemini_unverified" | "gemini_unavailable";
+  urlSearch?: { provider: "gemini-google-search" | "gemini"; summary: string; sources: string[];
+    assessment?: "suspicious" | "unverified"; nextStep?: string };
   schema: typeof REPORT_SCHEMA;
   id: string;
   workspace: string;

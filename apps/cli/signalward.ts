@@ -175,7 +175,9 @@ async function watchRepository(rootDir: string): Promise<number> {
  */
 function mcpServe(): Promise<number> {
   const key = signingKey();
-  const send = (message: unknown) => process.stdout.write(`${JSON.stringify(message)}\n`);
+  const send = (message: unknown): void => {
+    process.stdout.write(`${JSON.stringify(message)}\n`);
+  };
   const note = (text: string) => process.stderr.write(`[signalward-mcp] ${text}\n`);
   const tools = [
     { name: "scan_url", description: "Analyse a link or domain without opening it. Returns a signed verdict.", inputSchema: { type: "object", properties: { url: { type: "string", description: "Link or domain to inspect." } }, required: ["url"] } },
@@ -203,7 +205,8 @@ function mcpServe(): Promise<number> {
       }));
     }
     if (name === "scan_repository") {
-      const fetched = await fetchRepository(String(input.url ?? ""), { ...(input.ref ? { ref: String(input.ref) } : {}), ...(input.token ? { token: String(input.token) } : {}) });
+      const serverToken = env.GITHUB_TOKEN || env.SIGNALWARD_GITHUB_TOKEN;
+      const fetched = await fetchRepository(String(input.url ?? ""), { ...(input.ref ? { ref: String(input.ref) } : {}), ...(input.token ? { token: String(input.token) } : serverToken ? { token: serverToken } : {}) });
       return summarise(runRepositoryScan(fetched.files, fetched.label, ctx));
     }
     if (name === "verify_receipt") {

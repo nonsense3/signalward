@@ -1,12 +1,12 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Report } from "../../../packages/contracts/src/index.ts";
-import { ScanInputError, primaryAction, runMessageScan, runRepositoryScan, runUrlScan, type WorkspaceContext } from "../../../packages/engine/src/index.ts";
+import { ScanInputError, applyUrlFallbackVerdict, primaryAction, runMessageScan, runRepositoryScan, runUrlScan, updateUrlNotice, type WorkspaceContext } from "../../../packages/engine/src/index.ts";
 import { MESSAGE_LIMIT } from "../../../packages/fraud-scan/src/index.ts";
 import { RepoFetchError, fetchRepository } from "../../../packages/repo-fetch/src/index.ts";
 import { domainAgeFinding, urlHausHostFinding } from "../../../packages/url-intel/src/index.ts";
 import { issueReceipt, trustedKeySet, verifyReceipt, type SigningKey, type TrustedKey } from "../../../packages/receipts/src/index.ts";
-import { briefFor, type AiConfig } from "./ai.ts";
+import { briefFor, searchUnmatchedUrl, type AiConfig } from "./ai.ts";
 import { checkPassword, type AuthProvider, type AuthResult, type SessionData, type User } from "./auth.ts";
 import { AppError, EMAIL, badRequest, forbidden, notFound, rateLimited, unauthorized, validate } from "./errors.ts";
 import { RateLimiter, SECURITY_HEADERS, cookie, deriveIndicatorKey, open, readCookie, sameOrigin, seal, type IndicatorMasterVersion } from "./security.ts";
@@ -33,6 +33,8 @@ export type ApiDeps = {
   urlIntel: boolean;
   urlHausAuthKey: string | null;
   urlRiskModel: import("../../../packages/url-intel/src/model.ts").UrlRiskModel | null;
+  /** Public-repos-only GitHub token used when the user supplies none. */
+  githubToken?: string | null;
 };
 
 type Ctx = { rid: string; ip: string; setCookies: string[]; origin: string };
@@ -367,7 +369,11 @@ export function createApi(deps: ApiDeps) {
         broadcast(actor.userId, { type: "scan.started", kind });
         let fetched;
         try {
-          fetched = await fetchRepository(body.url, { ...(body.ref ? { ref: body.ref } : {}), ...(body.token ? { token: body.token } : {}) });
+          fetched = await fetchRepository(body.url, {
+            ...(body.ref ? { ref: body.ref } : {}),
+            ...(body.token ? { token: body.token } : {}),
+            ...(deps.githubToken ? { fallbackToken: deps.githubToken } : {}),
+          });
         } catch (error) {
           if (error instanceof RepoFetchError) throw new AppError(error.status, error.code, error.message, { field: "url" });
           throw error;
@@ -397,6 +403,18 @@ export function createApi(deps: ApiDeps) {
             ...(urlhaus ? { urlhaus } : {}),
             urlRiskModel: deps.urlRiskModel,
           });
+          await searchUnmatchedUrl(report, deps.ai);
+          applyUrlFallbackVerdict(report);
+          updateUrlNotice(report);
+          if (report.verdict === "inconclusive" && report.scope.kind === "url" && report.urlDataset?.labels.length !== 1) {
+            const datasetDetail = !report.urlDataset ? "The historical dataset was unavailable."
+              : report.urlDataset.labels.length ? "Historical records disagree."
+              : "This URL has no historical dataset match.";
+            const searchDetail = report.urlSearch?.assessment
+              ? `Gemini assessment: ${report.urlSearch.assessment}. ${report.urlSearch.summary}`
+              : report.coverage.find(item => item.detector === "gemini_search")?.detail ?? "Gemini Search could not run for this input.";
+            report.summary = `Inconclusive: ${datasetDetail} ${searchDetail}`;
+          }
         } catch (error) {
           if (error instanceof ScanInputError) throw new AppError(422, error.code, error.message, { field: "url" });
           throw error;

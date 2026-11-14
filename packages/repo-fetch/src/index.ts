@@ -100,30 +100,81 @@ async function readCapped(stream: ReadableStream<Uint8Array>): Promise<{ buffer:
 
 export type FetchedRepository = { files: SourceFile[]; label: string; truncated: boolean; fileCount: number };
 
-/** Download and extract a repository into bounded SourceFile[]. The token, if given, is used only here. */
-export async function fetchRepository(input: string, options: { ref?: string; token?: string; signal?: AbortSignal } = {}): Promise<FetchedRepository> {
-  const target = parseRepoTarget(input);
-  const ref = (options.ref ?? target.ref ?? "").replace(/^\/+|\/+$/g, "");
-  const path = `${target.owner}/${target.repo}/tarball${ref ? `/${encodeURIComponent(ref)}` : ""}`;
-  const headers: Record<string, string> = { "User-Agent": "SignalWard-Scanner", "X-GitHub-Api-Version": "2022-11-28" };
-  if (options.token) headers.Authorization = `Bearer ${options.token}`;
+export type FetchOptions = {
+  ref?: string;
+  /** The caller's own token (private repositories). Sent only to api.github.com. */
+  token?: string;
+  /**
+   * Server-wide token used when the caller gave none. It must be scoped to public repositories only
+   * (fine-grained, "Public repositories (read-only)"), otherwise any user could scan what it can see.
+   */
+  fallbackToken?: string;
+  signal?: AbortSignal;
+};
 
-  let response: Response;
+async function download(url: string, headers: Record<string, string>, signal?: AbortSignal): Promise<Response> {
   try {
-    response = await fetch(`https://api.github.com/repos/${path}`, { headers, redirect: "follow", signal: options.signal ?? AbortSignal.timeout(25_000) });
-  } catch (error) {
+    return await fetch(url, { headers, redirect: "follow", signal: signal ?? AbortSignal.timeout(25_000) });
+  } catch {
     throw new RepoFetchError(503, "REPO_UNREACHABLE", "Could not reach GitHub. Check the URL and your connection.");
   }
-  if (!response.ok || !response.body) {
-    const remaining = response.headers.get("x-ratelimit-remaining");
-    if (response.status === 404) throw new RepoFetchError(404, "REPO_NOT_FOUND", "Repository or branch not found. For a private repo, add a GitHub token.");
-    if (response.status === 401) throw new RepoFetchError(401, "REPO_TOKEN_REJECTED", "The GitHub token was rejected. Use a fine-grained token with read-only contents access.");
-    if (response.status === 403 && remaining === "0") throw new RepoFetchError(429, "REPO_RATE_LIMITED", "GitHub's rate limit was reached. Add a token or try again in a few minutes.");
-    if (response.status === 403) throw new RepoFetchError(403, "REPO_FORBIDDEN", "Access denied. The repository may be private — add a GitHub token.");
-    throw new RepoFetchError(502, "REPO_DOWNLOAD_FAILED", `GitHub returned an unexpected status (${response.status}).`);
+}
+
+const isRateLimited = (response: Response) =>
+  response.status === 429 || (response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0");
+
+/**
+ * Get the tarball stream. Without a caller token, public repositories come from the source archive
+ * (github.com/<o>/<r>/archive/<ref>.tar.gz), which is not counted against the REST API's 60-requests-
+ * per-hour anonymous limit. Private repositories, or archive failures, go through the REST API with
+ * the caller's token, or the server's public-only token as a fallback.
+ */
+async function openTarball(target: RepoTarget, ref: string, options: FetchOptions): Promise<ReadableStream<Uint8Array>> {
+  const base = { "User-Agent": "SignalWard-Scanner" };
+  let archiveStatus = 0;
+  if (!options.token) {
+    const archive = await download(`https://github.com/${target.owner}/${target.repo}/archive/${ref ? ref.split("/").map(encodeURIComponent).join("/") : "HEAD"}.tar.gz`, base, options.signal);
+    if (archive.ok && archive.body) return archive.body;
+    archiveStatus = archive.status;
+    await archive.body?.cancel().catch(() => {});
   }
 
-  const { buffer, truncated } = await readCapped(response.body.pipeThrough(new DecompressionStream("gzip")));
+  const token = options.token ?? options.fallbackToken;
+  if (!token && archiveStatus === 404) {
+    throw new RepoFetchError(404, "REPO_NOT_FOUND", "Repository or branch not found. For a private repo, add a GitHub token.");
+  }
+  const headers: Record<string, string> = { ...base, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await download(`https://api.github.com/repos/${target.owner}/${target.repo}/tarball${ref ? `/${encodeURIComponent(ref)}` : ""}`, headers, options.signal);
+  if (response.ok && response.body) return response.body;
+  await response.body?.cancel().catch(() => {});
+
+  const own = Boolean(options.token);
+  if (response.status === 404) throw new RepoFetchError(404, "REPO_NOT_FOUND", own ? "Repository or branch not found, or the token can't read it." : "Repository or branch not found. For a private repo, add a GitHub token.");
+  if (response.status === 401) {
+    if (!own) throw new RepoFetchError(503, "REPO_SERVER_TOKEN_INVALID", "The scanner's GitHub access is misconfigured. Add your own token or try again later.");
+    throw new RepoFetchError(401, "REPO_TOKEN_REJECTED", "The GitHub token was rejected. Use a fine-grained token with read-only contents access.");
+  }
+  if (isRateLimited(response)) {
+    const reset = Number(response.headers.get("x-ratelimit-reset"));
+    const minutes = Number.isFinite(reset) && reset > 0 ? Math.max(1, Math.ceil((reset * 1000 - Date.now()) / 60_000)) : 0;
+    const when = minutes ? `in about ${minutes} min` : "in a few minutes";
+    throw new RepoFetchError(429, "REPO_RATE_LIMITED", own ? `Your GitHub token hit its rate limit. Try again ${when}.` : `GitHub is limiting requests right now. Add a GitHub token under "Branch, or a private repository", or try again ${when}.`);
+  }
+  if (response.status === 403) throw new RepoFetchError(403, "REPO_FORBIDDEN", "Access denied. The repository may be private — add a GitHub token.");
+  throw new RepoFetchError(502, "REPO_DOWNLOAD_FAILED", `GitHub returned an unexpected status (${response.status}).`);
+}
+
+/** Download and extract a repository into bounded SourceFile[]. Tokens are used only for this request. */
+export async function fetchRepository(input: string, options: FetchOptions = {}): Promise<FetchedRepository> {
+  const target = parseRepoTarget(input);
+  const ref = (options.ref ?? target.ref ?? "").replace(/^\/+|\/+$/g, "");
+  if (ref && (!/^[\w./-]{1,200}$/.test(ref) || ref.includes(".."))) {
+    throw new RepoFetchError(422, "REPO_REF_INVALID", "That branch, tag or commit name isn't valid.");
+  }
+  const stream = await openTarball(target, ref, options);
+
+  const { buffer, truncated } = await readCapped(stream.pipeThrough(new DecompressionStream("gzip")));
   const entries = parseTar(buffer);
 
   const files: SourceFile[] = [];

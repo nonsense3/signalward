@@ -9,10 +9,6 @@ if (footerWord) mountFooterLogo(footerWord);
 const stage = $(".stage");
 const canvas = $("canvas", stage);
 const heroCard = $('[data-frame="hero"]');
-const dock = $('[data-frame="dock"]');
-const dockLabel = $('[data-hud="label"]');
-const chapters = $$(".chapter");
-const hud = { count: $('[data-hud="count"]'), frame: $('[data-hud="frame"]') };
 
 /* ---------- CTA ---------- */
 $("#cta-form").addEventListener("submit", (event) => {
@@ -36,13 +32,8 @@ function updateWords() {
   words.forEach((word, index) => word.classList.toggle("on", index < lit));
 }
 
-/* ---------- Frame tracking: the canvas lives in the hero card, then in the observatory dock ---------- */
+/* ---------- Hero canvas ---------- */
 const smooth = (current, target, rate, dt) => current + (target - current) * Math.min(1, dt * rate);
-function frameRect() {
-  const d = dock.getBoundingClientRect();
-  if (d.top < innerHeight && d.bottom > 0) return { rect: d, where: "dock" };
-  return { rect: heroCard.getBoundingClientRect(), where: "hero" };
-}
 function applyClip(rect) {
   const s = stage.style;
   s.setProperty("--ct", `${Math.max(-2, rect.top)}px`);
@@ -51,34 +42,16 @@ function applyClip(rect) {
   s.setProperty("--cb", `${innerHeight - rect.bottom}px`);
 }
 
-function activeChapter() {
-  let best = null, bestDistance = Infinity;
-  for (const chapter of chapters) {
-    const rect = chapter.getBoundingClientRect();
-    const distance = Math.abs(rect.top + rect.height / 2 - innerHeight / 2);
-    if (distance < bestDistance && rect.bottom > 0 && rect.top < innerHeight) { best = chapter; bestDistance = distance; }
-  }
-  return best;
-}
-
 let scene = null;
-let shown = 0, target = 0;
-let lastScroll = scrollY, lastFrame = performance.now(), frameAvg = 16, currentChapter = null;
+let lastScroll = scrollY, lastFrame = performance.now(), frameAvg = 16;
 
 function tick(now) {
   requestAnimationFrame(tick);
   const dt = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
   updateWords();
-  const { rect, where } = frameRect();
+  const rect = heroCard.getBoundingClientRect();
   applyClip(rect);
-
-  const chapter = where === "dock" ? activeChapter() : null;
-  if (chapter !== currentChapter) {
-    currentChapter = chapter;
-    chapters.forEach((item) => item.classList.toggle("is-active", item === chapter));
-    if (chapter) dockLabel.textContent = chapter.dataset.label;
-  }
   if (!scene) return;
 
   const s = scene.state;
@@ -89,36 +62,17 @@ function tick(now) {
   let cx = ((rect.left + rect.width / 2) / innerWidth) * 2 - 1;
   let cy = 1 - ((rect.top + rect.height / 2) / innerHeight) * 2;
   const hh = Math.min(1, rect.height / innerHeight);
-  if (where === "hero") {
-    if (wide) cx += 0.32 * (rect.width / innerWidth);
-    else cy += 0.22;
-  } else if (wide) {
-    // The chapter card sits bottom-left in the frame; keep the formation clear of it.
-    cx += 0.24 * (rect.width / innerWidth);
-  }
+  if (wide) cx += 0.32 * (rect.width / innerWidth);
+  else cy += 0.22;
   s.view.cx = smooth(s.view.cx, cx, 14, dt);
   s.view.cy = smooth(s.view.cy, cy, 14, dt);
-  s.view.h = smooth(s.view.h, where === "hero" ? hh : hh * 0.92, 6, dt);
+  s.view.h = smooth(s.view.h, hh, 6, dt);
 
-  // Formation: hero keeps the spectral stream; each chapter has its own shape. Morphs run on time, not scroll.
-  const next = chapter ? Number(chapter.dataset.shape) : 0;
-  if (next !== target) {
-    shown = s.mix > 0.5 ? s.shapeB : s.shapeA;
-    target = next;
-    s.shapeA = shown;
-    s.shapeB = target;
-    s.mix = 0;
-  }
-  s.mix = Math.min(1, s.mix + dt / 1.3);
-  s.prismBlend = smooth(s.prismBlend, where === "hero" ? 1 : 0, 3, dt);
-  // The glass case crowds the small mobile dock, so it only appears on wide screens.
-  s.caseBlend = smooth(s.caseBlend, where === "dock" && wide ? 1 : 0, 3, dt);
   const velocity = Math.abs(scrollY - lastScroll) / Math.max(dt, 0.001);
   lastScroll = scrollY;
-  const wave = Math.sin(Math.PI * s.mix);
   const speed = Math.min(1, velocity / 3000);
-  s.energy = smooth(s.energy, wave * 0.5 + speed * 0.3, 5, dt);
-  s.aberration = smooth(s.aberration, wave * 0.4 + speed * 0.7, 5, dt);
+  s.energy = smooth(s.energy, speed * 0.2, 5, dt);
+  s.aberration = smooth(s.aberration, speed * 0.3, 5, dt);
 }
 requestAnimationFrame(tick);
 
@@ -131,26 +85,33 @@ addEventListener("pointermove", (event) => {
 document.addEventListener("pointerleave", () => scene?.pointer(0, 0, false));
 
 async function startMotion() {
+  // The poster only appears when there is no live scene (reduced motion, no WebGL2, lost context).
+  // While the scene loads the frame shows its plain gradient, so nothing static lingers on refresh.
+  const showPoster = () => {
+    stage.classList.remove("is-live");
+    stage.classList.add("is-static");
+  };
   if (reducedMotion()) {
     scene?.pause();
-    stage.classList.remove("is-live");
-    return;
+    return showPoster();
   }
   try {
     const { startScene } = await import("./scene.js");
     const compact = matchMedia("(max-width: 680px)").matches || (navigator.deviceMemory ?? 8) <= 2;
-    scene ??= startScene(canvas, { compact, light: currentTheme() === "light" });
+    const first = !scene;
+    scene ??= startScene(canvas, { compact, prisms: false, light: currentTheme() === "light" });
     scene.resume();
-    stage.classList.add("is-live");
-    hud.count.textContent = scene.count.toLocaleString("en");
-    canvas.addEventListener("scene:frame", (event) => {
-      frameAvg = frameAvg * 0.94 + event.detail.dt * 1000 * 0.06;
-      hud.frame.textContent = `${frameAvg.toFixed(1)} ms`;
-    });
-    canvas.addEventListener("scene:lost", () => stage.classList.remove("is-live"), { once: true });
+    stage.classList.remove("is-static");
+    if (first) {
+      // Reveal on the first drawn frame, never on a blank (black) canvas.
+      canvas.addEventListener("scene:frame", () => stage.classList.add("is-live"), { once: true });
+      canvas.addEventListener("scene:lost", showPoster, { once: true });
+    } else {
+      stage.classList.add("is-live");
+    }
   } catch (error) {
     console.warn("Scene unavailable, showing the static poster:", error instanceof Error ? error.message : error);
-    stage.classList.remove("is-live");
+    showPoster();
   }
 }
 addEventListener("themechange", (event) => scene?.setLight(event.detail === "light"));

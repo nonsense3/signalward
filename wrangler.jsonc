@@ -9,6 +9,7 @@
   //   SIGNALWARD_SESSION_SECRET  SIGNALWARD_INDICATOR_KEY  SIGNALWARD_SIGNING_KEY  SIGNALWARD_REPORT_ENCRYPTION_KEY
   //   optional: URLHAUS_AUTH_KEY  SIGNALWARD_URL_MODEL_B64  GEMINI_API_KEY
   //             URL model artifacts are generated from a licensed, labeled CSV with scripts/train_url_model.py.
+  //   optional: GEMINI_API_KEY  GITHUB_TOKEN (fine-grained, public repositories read-only)
   //             SIGNALWARD_PREVIOUS_SIGNING_KEYS  SIGNALWARD_PREVIOUS_INDICATOR_KEYS
   //             SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS  SIGNALWARD_INDICATOR_KEY_VERSION
   "name": "signalward",
@@ -23,7 +24,7 @@
   "observability": { "enabled": true },
   "vars": {
     "URL_INTEL": "on",
-    "GEMINI_MODEL": "gemini-2.5-flash",
+    "GEMINI_MODEL": "gemini-3.5-flash-lite",
     "ALLOW_SIGNUP": "true",
     "AUTH_PROVIDER": "supabase"
   }

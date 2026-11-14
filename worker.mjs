@@ -16,7 +16,7 @@ import { loadSigningKey } from "./packages/receipts/src/index.ts";
 
 // Cloudflare's asset handler serves /scan from scan.html and redirects /scan.html -> /scan,
 // so routes map to extensionless paths. Only the OAuth callback needs an alias.
-const APP_ROUTES = { "/": "/", "/scan": "/scan", "/account": "/account", "/auth": "/auth", "/auth/callback": "/auth", "/verify": "/verify" };
+const APP_ROUTES = { "/": "/", "/scan": "/scan", "/account": "/account", "/auth": "/auth", "/auth/callback": "/auth", "/verify": "/verify", "/terms": "/terms", "/privacy": "/privacy" };
 const PROTECTED = new Set(["/scan", "/account"]);
 
 let cached = null;
@@ -43,6 +43,7 @@ function build(env) {
     urlIntel: config.urlIntel,
     urlHausAuthKey: config.urlHausAuthKey,
     urlRiskModel: config.urlRiskModel,
+    githubToken: config.githubToken,
     publicUrl: config.publicUrl,
     secureCookies: true,
     allowSignup: config.auth.allowSignup,

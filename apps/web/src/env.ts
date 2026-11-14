@@ -27,10 +27,12 @@ export type Config = {
     allowSignup: boolean;
     supabase: { url: string; anonKey: string } | null;
   };
-  ai: { apiKey: string | null; model: string; timeoutMs: number };
+  ai: { apiKey: string | null; model: string; timeoutMs: number; searchGrounding?: boolean };
   urlIntel: boolean;
   urlHausAuthKey: string | null;
   urlRiskModel: UrlRiskModel | null;
+  /** Server-wide GitHub token for public repository downloads (scope it to public repos only). */
+  githubToken: string | null;
   warnings: string[];
 };
 
@@ -194,8 +196,8 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
   if (!["true", "false"].includes(allowSignupRaw)) problems.push("ALLOW_SIGNUP must be true or false.");
 
   const aiKey = blank(env.GEMINI_API_KEY);
-  const model = blank(env.GEMINI_MODEL) ?? "gemini-2.5-flash";
-  if (!/^[a-z0-9][a-z0-9.\-]{2,63}$/.test(model)) problems.push("GEMINI_MODEL must be a model name such as gemini-2.5-flash.");
+  const model = blank(env.GEMINI_MODEL) ?? "gemini-3.5-flash-lite";
+  if (!/^[a-z0-9][a-z0-9.\-]{2,63}$/.test(model)) problems.push("GEMINI_MODEL must be a model name such as gemini-3.5-flash-lite.");
   const timeoutMs = Number(blank(env.GEMINI_TIMEOUT_MS) ?? 7000);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 30000) problems.push("GEMINI_TIMEOUT_MS must be between 1000 and 30000.");
   if (!aiKey) warnings.push("GEMINI_API_KEY is empty; report summaries use the deterministic fallback.");
@@ -208,6 +210,12 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
   if (urlModelEncoded && !urlRiskModel) problems.push("SIGNALWARD_URL_MODEL_B64 is not a valid SignalWard URL model artifact.");
   if (!urlHausAuthKey) warnings.push("URLHAUS_AUTH_KEY is empty; live URL reputation checks will be unavailable and unmatched URL scans remain inconclusive.");
   if (!urlRiskModel) warnings.push("SIGNALWARD_URL_MODEL_B64 is empty; ML URL classification is unavailable and unmatched URL scans remain inconclusive.");
+
+  const githubToken = blank(env.GITHUB_TOKEN) ?? blank(env.SIGNALWARD_GITHUB_TOKEN);
+  if (githubToken && !/^(github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,})$/.test(githubToken)) {
+    problems.push("GITHUB_TOKEN must be a GitHub token (github_pat_… or ghp_…).");
+  }
+  if (!githubToken) warnings.push("GITHUB_TOKEN is empty; private-repo fallbacks and REST retries use GitHub's anonymous limit (60 requests per hour per IP).");
 
   if (problems.length) throw new ConfigError(problems);
 
@@ -224,10 +232,11 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
     previousIndicatorKeys,
     previousReportEncryptionKeys,
     auth: { provider, allowSignup: allowSignupRaw === "true", supabase: provider === "supabase" ? supabase : null },
-    ai: { apiKey: aiKey, model, timeoutMs },
+    ai: { apiKey: aiKey, model, timeoutMs, searchGrounding: env.GEMINI_SEARCH_GROUNDING === "true" },
     urlIntel: urlIntelRaw === "on",
     urlHausAuthKey,
     urlRiskModel,
+    githubToken,
     warnings,
   };
 }

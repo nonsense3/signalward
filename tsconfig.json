@@ -1,0 +1,19 @@
+{
+  // Editor and `npm run typecheck` only. Node runs the .ts sources directly (type stripping); nothing is emitted.
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": false,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["apps/**/*.ts", "packages/**/*.ts", "tests/**/*.ts", ".signalward/**/*.ts"],
+  "exclude": ["node_modules", "apps/web/public"]
+}

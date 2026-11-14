@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { REPORT_SCHEMA, type DetectorCoverage, type Finding, type Indicator, type Mitigation, type Report, type Stage } from "../../contracts/src/index.ts";
 import { analyzeMessage, analyzeUrlLexical, indicatorTag, normalizeTarget, type RawIndicator } from "../../fraud-scan/src/index.ts";
+import { lookupUrl, scoreUrl } from "./url-model.ts";
 import { finding } from "../../fraud-scan/src/rules.ts";
 import { POLICY_VERSION, actionsFor, evaluateFraudScan, evaluateRepositoryScan, type RepositoryFinding } from "../../policy/src/index.ts";
 import { scanFiles, type SourceFile } from "../../repo-scan/src/index.ts";
@@ -192,6 +193,8 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options:
   timer.mark("normalize");
   const u = normalized.value;
   const lexical = analyzeUrlLexical(u);
+  const urlModel = scoreUrl(rawUrl);
+  const dataset = lookupUrl(rawUrl);
   timer.mark("detect");
   const raw: RawIndicator[] = [{ type: "url", display: u.normalized.slice(0, 120), normalized: u.normalized }];
   if (u.registrableDomain) raw.push({ type: "domain", display: u.registrableDomain, normalized: u.registrableDomain });
@@ -201,6 +204,20 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options:
   const findings = [...lexical, ...protectedIndicators.findings];
   const modelScore = options.urlRiskModel ? scoreUrlRiskModel(options.urlRiskModel, u) : null;
   if (modelScore?.finding) findings.push(modelScore.finding);
+  const historicalLabel = dataset.labels.length === 1 ? dataset.labels[0] : undefined;
+  if (historicalLabel && historicalLabel !== "benign") {
+    findings.push(finding({
+      ruleId: "intelligence.historical_url_match",
+      category: "intelligence",
+      severity: "medium",
+      confidence: "medium",
+      title: `Historical URL match: ${historicalLabel}`,
+      description: "The submitted URL matches a record in the local historical dataset.",
+      impact: "The historical label is a reason to review the destination before using it.",
+      remediation: "Use a known official address or verify the destination with a current reputation source.",
+      evidence: [{ label: "Historical dataset label", value: historicalLabel }],
+    }));
+  }
   // Optional passive domain intelligence: query the domain's registration age, never the page itself.
   const ageCheck = options.domainAge && u.registrableDomain && !u.isIp
     ? Promise.resolve().then(() => options.domainAge!(u.registrableDomain!)).catch(() => null)
@@ -214,24 +231,29 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options:
   ]);
   const domainAgeRan = ageCheck !== null;
   if (ageFinding) findings.push(ageFinding);
-  if (urlhausResult?.finding) findings.push(urlhausResult.finding);
+  if (urlhausResult && "finding" in urlhausResult && urlhausResult.finding) findings.push(urlhausResult.finding);
   if (ageCheck || urlhausCheck) timer.mark("intel");
   const coverage: DetectorCoverage[] = [
     { detector: "url_normalization", status: "ran", detail: "Refanged, credentials stripped, IDN decoded.", required: true },
     { detector: "link_lexical", status: "ran", detail: "Brand, homograph, redirect, shortener and hosting rules.", required: true },
+    { detector: "url_dataset", status: historicalLabel ? "ran" : dataset.available ? "partial" : "skipped", detail: dataset.available
+      ? historicalLabel ? "An unambiguous URL match appears in the historical dataset."
+        : dataset.labels.length ? "Matching historical records disagree." : "No matching URL appears in the historical dataset."
+      : "No labeled URL dataset is loaded.", required: !modelScore || urlhausResult?.status !== "checked" },
+    { detector: "url_phishing_model", status: urlModel ? "ran" : "skipped", detail: urlModel
+      ? "Local classifier trained on labeled URLs. Its score is advisory."
+      : "The trained model or compatible URL features were unavailable.", required: false },
     { detector: "workspace_correlation", status: "ran", detail: "Tags matched against this workspace's history and blocklist.", required: true },
     { detector: "url_model", status: modelScore ? "ran" : "skipped", detail: modelScore
       ? `Model ${options.urlRiskModel!.modelVersion} (${options.urlRiskModel!.datasetId}) returned a structural score of ${Math.round(modelScore.score * 100)}/100; review threshold ${Math.round(modelScore.threshold * 100)}/100.`
-      : "No trained URL model is configured. Unmatched links cannot be evaluated by ML.", required: true },
+      : "No trained URL model is configured. Unmatched links cannot be evaluated by ML.", required: !historicalLabel },
     { detector: "urlhaus_host_intel", status: urlhausResult?.status === "checked" ? "ran" : urlhausResult ? "partial" : "skipped",
-      detail: urlhausResult?.detail ?? "URLhaus Auth-Key is not configured; no live threat-intelligence lookup ran.", required: true },
+      detail: urlhausResult?.detail ?? "URLhaus Auth-Key is not configured; no live threat-intelligence lookup ran.", required: !historicalLabel },
     { detector: "domain_age", status: domainAgeRan ? "ran" : "skipped", detail: domainAgeRan
       ? `RDAP lookup attempted for ${u.registrableDomain}; ${ageFinding ? "a recent registration signal was found." : "no recent registration finding was returned."}`
       : "Passive domain-age intelligence is off on this server.", required: false },
     { detector: "page_inspection", status: "skipped", detail: "TLS, redirects and page content are not inspected. SignalWard does not open submitted links.", required: false },
   ];
-  // A clean lexical result is not a clean bill of health. Both the trained model and
-  // live reputation lookup must run before the policy may return low_risk.
   const complete = coverage.every((item) => !item.required || item.status === "ran");
   const verdict = evaluateFraudScan(findings, complete ? "complete" : "incomplete");
   timer.mark("policy");
@@ -243,6 +265,8 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options:
     kind: "url",
     createdAt: new Date().toISOString(),
     scope: { kind: "url", normalized: u.normalized.slice(0, 2048), registrableDomain: u.registrableDomain },
+    ...(urlModel ? { urlModel } : {}),
+    ...(dataset.available ? { urlDataset: { labels: dataset.labels } } : {}),
     policyVersion: POLICY_VERSION,
     verdict,
     coverage,
@@ -259,6 +283,30 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options:
 }
 
 const ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 } as const;
+
+/** A Gemini warning can request review when local evidence leaves a link unresolved. */
+export function applyUrlFallbackVerdict(report: Report): void {
+  if (report.kind !== "url" || report.verdict !== "inconclusive" ||
+      report.urlDataset?.labels.length === 1 || report.urlSearch?.assessment !== "suspicious") return;
+  report.verdict = "suspicious";
+  report.summary = `Suspicious: Gemini flagged this link for review. ${report.urlSearch.summary}`;
+  report.mitigations = mitigations("url", report.verdict);
+  report.threatAssessment = buildThreatAssessment({
+    kind: report.kind, verdict: report.verdict, findings: report.findings, coverage: report.coverage,
+  });
+}
+
+export function updateUrlNotice(report: Report): void {
+  if (report.kind !== "url" || report.verdict !== "inconclusive") return;
+  if (report.urlSearch?.assessment === "unverified") report.urlNotice = "gemini_unverified";
+  else if (!report.urlDataset) report.urlNotice = "dataset_unavailable";
+  else if (report.urlDataset.labels.length > 1) report.urlNotice = "dataset_conflict";
+  else if (report.urlDataset.labels.length === 0) {
+    report.urlNotice = report.coverage.some(check => check.detector === "gemini_search")
+      ? "gemini_unavailable" : "dataset_miss";
+  }
+}
+
 function sortFindings(findings: Finding[]): Finding[] {
   const unique = new Map(findings.map((item) => [item.id, item]));
   return [...unique.values()].sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);

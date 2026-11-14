@@ -100,6 +100,7 @@ function render(stored, { scroll = true } = {}) {
   empty.hidden = true;
   $("#result")?.remove();
   const verdict = VERDICT[report.verdict] ?? { label: report.verdict, tone: "info" };
+  const limitedLinkResult = report.kind === "url" && report.verdict === "inconclusive";
   const counts = {};
   for (const finding of report.findings) counts[finding.severity] = (counts[finding.severity] ?? 0) + 1;
   const findings = [...report.findings].sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
@@ -110,12 +111,21 @@ function render(stored, { scroll = true } = {}) {
     : null;
 
   const container = h("div", { class: "stack", id: "result" },
-    h("section", { class: `verdict verdict--${verdict.tone}`, "aria-label": "Verdict" },
+    h("section", { class: `verdict verdict--${limitedLinkResult ? "success" : verdict.tone}`, "aria-label": "Verdict" },
       h("div", { class: "verdict__top" },
-        h("div", {}, h("p", { class: "verdict__label", text: verdict.label }), h("p", { class: "verdict__kind", text: `${KIND_LABEL[report.kind]} · ${fmtTime(report.createdAt)}` })),
+        h("div", {}, h("p", { class: "verdict__label", text: limitedLinkResult ? "Low observed risk" : ({
+          dataset_miss: "No dataset match",
+          dataset_conflict: "Conflicting records",
+          dataset_unavailable: "Dataset unavailable",
+          gemini_unverified: "Unverified by Gemini",
+          gemini_unavailable: "Gemini unavailable",
+        })[report.urlNotice] ?? verdict.label }), h("p", { class: "verdict__kind", text: `${KIND_LABEL[report.kind]} · ${fmtTime(report.createdAt)}` })),
         h("div", { class: "counts" }, Object.keys(ORDER).filter((s) => counts[s]).map((s) => h("span", { class: `tag tag--${s}`, text: `${counts[s]} ${s}` })),
-          report.findings.length ? null : h("span", { class: "tag tag--success", text: "no findings" }))),
-      h("p", { class: "verdict__headline", text: brief?.headline ?? report.summary }),
+          limitedLinkResult ? h("span", { class: "tag tag--warning", text: "limited coverage" })
+            : report.findings.length ? null : h("span", { class: "tag tag--success", text: "no findings" }))),
+      h("p", { class: "verdict__headline", text: limitedLinkResult
+        ? report.summary.replace(/^Inconclusive:\s*/i, "")
+        : brief?.headline ?? report.summary }),
       brief?.points?.length ? h("ul", { class: "points" }, brief.points.map((point) => h("li", { text: point.text }))) : null,
       h("div", { class: "verdict__foot" },
         h("span", { class: "next", text: brief?.nextStep ?? report.mitigations[0]?.detail ?? "No action needed." }),
@@ -130,6 +140,30 @@ function render(stored, { scroll = true } = {}) {
       h("p", { class: "muted", text: report.threatAssessment.scope }),
       h("div", { class: "findings" }, report.threatAssessment.scenarios.map((scenario) => threatScenarioRow(scenario, report.findings))),
       report.threatAssessment.coverageLimitations.length ? h("p", { class: "muted", text: `Coverage limits: ${report.threatAssessment.coverageLimitations.join("; ")}` }) : null) : null,
+
+    report.kind === "url" && report.urlModel ? h("section", { class: "card", "aria-labelledby": "url-model-title" },
+      h("div", { class: "card-head" },
+        h("h3", { id: "url-model-title", text: "Phishing model" }),
+        h("span", { class: "meta", text: report.urlModel.modelVersion })),
+      h("p", { text: `Advisory score: ${report.urlModel.score.toFixed(3)} / 1` }),
+      h("p", { class: "muted", text: "Trained on labeled Kaggle URLs. The model scores URL structure locally. Scan findings determine the verdict and actions." })) : null,
+
+    report.kind === "url" && (report.urlDataset || report.urlSearch || report.coverage.some(item => item.detector === "gemini_search"))
+      ? h("section", { class: "card" },
+        h("h3", { text: "URL evidence" }),
+        h("p", { text: report.urlDataset?.labels.length
+          ? `Historical dataset labels: ${report.urlDataset.labels.join(", ")}.`
+          : report.urlDataset ? "No matching URL in the historical dataset." : "Historical dataset unavailable." }),
+        report.urlSearch ? h("div", {},
+          report.urlSearch.assessment ? h("p", { text: `Gemini assessment (advisory): ${report.urlSearch.assessment}` }) : null,
+          h("p", { text: report.urlSearch.summary }),
+          report.urlSearch.nextStep ? h("p", { text: report.urlSearch.nextStep }) : null,
+          h("ul", {}, report.urlSearch.sources.map((source, index) =>
+            h("li", {}, h("a", { href: source, text: `Public source ${index + 1}`, target: "_blank", rel: "noopener noreferrer" }))))) :
+          report.coverage.some(item => item.detector === "gemini_search")
+            ? h("p", { class: "muted", text: report.coverage.find(item => item.detector === "gemini_search").detail })
+            : null)
+      : null,
 
     report.mitigations?.length ? h("section", { class: "card", "aria-labelledby": "mitigations-title" },
       h("div", { class: "card-head" }, h("h3", { id: "mitigations-title", text: "Mitigations" }), h("span", { class: "meta", text: "actions and outcomes" })),
@@ -166,13 +200,19 @@ function render(stored, { scroll = true } = {}) {
 
 async function runScan(kind, body, frame) {
   if (frame) clearErrors(frame);
+  frame?.querySelector(".scan-error")?.remove();
   frame?.classList.add("scanning");
   const buttons = frame ? $$("button", frame) : [];
   buttons.forEach((button) => (button.disabled = true));
   try {
     render(await api(`/api/scans/${kind}`, { method: "POST", body, timeout: 90_000 }));
   } catch (error) {
-    reportError(error, frame?.tagName === "FORM" ? frame : undefined);
+    const form = frame?.tagName === "FORM" ? frame : undefined;
+    if (!form || !(error instanceof ApiError) || error.field || error.status === 401) {
+      reportError(error, form);
+    } else {
+      form.append(h("p", { class: "scan-error", role: "alert", text: error.message || "The scan could not finish. Try again." }));
+    }
   } finally {
     frame?.classList.remove("scanning");
     buttons.forEach((button) => (button.disabled = false));

@@ -38,6 +38,7 @@ const api = createApi({
   urlIntel: config.urlIntel,
   urlHausAuthKey: config.urlHausAuthKey,
   urlRiskModel: config.urlRiskModel,
+  githubToken: config.githubToken,
   publicUrl: config.publicUrl,
   secureCookies: config.secureCookies,
   allowSignup: config.auth.allowSignup,
@@ -52,10 +53,14 @@ const assets = new Map([
   ["/auth", html("auth.html")],
   ["/auth/callback", html("auth.html")],
   ["/verify", html("verify.html")],
+  ["/terms", html("terms.html")],
+  ["/privacy", html("privacy.html")],
+  ["/legal.css", ["legal.css", "text/css; charset=utf-8"]],
   ...["base.css", "site.css", "app.css"].map((name) => [`/${name}`, [name, "text/css; charset=utf-8"]]),
-  ...["theme.js", "ui.js", "site.js", "scene.js", "shapes.js", "footer-logo.js", "console.js", "verify.js", "verify-page.js", "auth.js", "account.js"].map((name) => [`/${name}`, [name, "text/javascript; charset=utf-8"]]),
+  ...["theme.js", "ui.js", "site.js", "scene.js", "shapes.js", "footer-logo.js", "console.js", "verify.js", "verify-page.js", "auth.js", "account.js", "legal.js"].map((name) => [`/${name}`, [name, "text/javascript; charset=utf-8"]]),
   ["/poster.svg", ["poster.svg", "image/svg+xml"]],
   ["/favicon.svg", ["favicon.svg", "image/svg+xml"]],
+  ...["logo-light.png", "logo-dark.png", "favicon-light.png", "favicon-dark.png"].map((name) => [`/${name}`, [name, "image/png"]]),
   ...["MonaSansVF.woff2", "HubotSansVF.woff2", "MonaspaceNeon-Regular.woff2"].map((name) => [`/fonts/${name}`, [`fonts/${name}`, "font/woff2"]]),
 ]);
 const PROTECTED = new Set(["/scan", "/account"]);

@@ -159,6 +159,8 @@ export function setTheme(theme, origin) {
     root.dataset.theme = theme;
     try { localStorage.setItem("sw-theme", theme); } catch {}
     for (const meta of $$('meta[name="theme-color"]')) meta.content = theme === "dark" ? "#07080b" : "#e9eaef";
+    const icon = $("link[data-favicon]");
+    if (icon) icon.href = theme === "dark" ? "/favicon-dark.png" : "/favicon-light.png";
     dispatchEvent(new CustomEvent("themechange", { detail: theme }));
   };
   root.classList.add("theme-swap");
@@ -300,7 +302,7 @@ function buildMenu(header) {
     } else {
       account.replaceChildren(h("div", { class: "menu__account" },
         h("div", { class: "meta" }, h("b", { text: "Not signed in" }), h("span", { text: "Your reports stay in your account." })),
-        h("a", { class: "pill pill--sm pill--dark", href: `/auth?next=${encodeURIComponent(here)}`, text: "Sign in" })));
+        h("a", { class: "pill pill--sm pill--dark", href: `/auth?next=${encodeURIComponent(here)}` }, "Sign in", h("span", { class: "arrow", "aria-hidden": "true" }))));
       const cta = $("[data-cta]", header);
       if (cta && here === "/") { cta.href = "/auth"; cta.firstChild.textContent = "Sign in"; }
     }

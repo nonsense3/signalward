@@ -1,0 +1,10 @@
+/* Terms and privacy: one readable column of boxed sections. */
+.legal{max-width:52rem;margin:0 auto;display:grid;gap:var(--gutter,1rem)}
+.legal__intro{display:grid;gap:.6rem;margin-bottom:.6rem}
+.legal__intro h1{font-size:clamp(2.4rem,5vw,4.2rem)}
+.legal__intro p{color:var(--muted);margin:0}
+.legal section{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:clamp(1.3rem,2.6vw,2rem);display:grid;gap:.7rem}
+.legal h2{font-size:clamp(1.25rem,2vw,1.6rem);margin:0}
+.legal p,.legal li{color:var(--ink-2);line-height:1.6;margin:0}
+.legal ul{margin:0;padding-left:1.1rem;display:grid;gap:.4rem}
+.legal a{color:var(--accent);font-weight:600}
