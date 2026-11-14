@@ -187,10 +187,6 @@ button.chip:hover{border-color:var(--accent);color:var(--accent)}
 [data-transition="in"] .curtain{transform:none;border-radius:0}
 .curtain.is-revealing{transition:transform .7s var(--ease-io),border-radius .7s var(--ease-io);transform:translateY(-100%);border-radius:0 0 var(--r-xl) var(--r-xl)}
 
-/* Cursor trail (fine pointers only; native cursor stays). */
-.cursor-fx{position:fixed;inset:0;z-index:88;pointer-events:none;mix-blend-mode:plus-lighter}
-[data-theme="light"] .cursor-fx{mix-blend-mode:multiply}
-
 /* ---------- Text reveal ---------- */
 .js-motion [data-reveal]{opacity:0;transform:translateY(24px);transition:opacity .9s var(--ease),transform 1.1s var(--ease)}
 .js-motion [data-reveal].is-in{opacity:1;transform:none}

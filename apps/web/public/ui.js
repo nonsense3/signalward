@@ -326,96 +326,10 @@ function initMagnetic() {
   }
 }
 
-function cssVar(name, fallback) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
-}
-
-/** Canvas cursor trail with a lagging glow dot. Native cursor stays visible for accessibility. */
-function initCursor() {
-  if (reducedMotion() || !matchMedia("(pointer: fine)").matches) return;
-  const canvas = document.body.appendChild(h("canvas", { class: "cursor-fx", "aria-hidden": "true" }));
-  const ctx = canvas.getContext("2d");
-  let w = 0, h2 = 0, dpr = 1;
-  const resize = () => {
-    dpr = Math.min(devicePixelRatio || 1, 2);
-    w = innerWidth;
-    h2 = innerHeight;
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h2 * dpr);
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h2}px`;
-  };
-  resize();
-  addEventListener("resize", resize, { passive: true });
-
-  const trail = [];
-  let tx = innerWidth / 2, ty = innerHeight / 2, px = tx, py = ty, visible = false, radius = 5, radiusTarget = 5;
-  let color = cssVar("--accent", "#3b2cff");
-  addEventListener("themechange", () => (color = cssVar("--accent", "#3b2cff")));
-  addEventListener("pointermove", (event) => {
-    if (event.pointerType === "touch") return;
-    tx = event.clientX;
-    ty = event.clientY;
-    visible = true;
-    const interactive = event.target?.closest?.("a,button,input,textarea,select,summary,label,[role='button'],[data-magnetic]");
-    radiusTarget = interactive ? 15 : 5;
-  }, { passive: true });
-  addEventListener("pointerdown", () => (radiusTarget = Math.max(9, radiusTarget)));
-  document.addEventListener("pointerleave", () => (visible = false));
-
-  let raf = 0;
-  const frame = () => {
-    raf = requestAnimationFrame(frame);
-    px += (tx - px) * 0.32;
-    py += (ty - py) * 0.32;
-    radius += (radiusTarget - radius) * 0.18;
-    trail.push({ x: px, y: py });
-    if (trail.length > 24) trail.shift();
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h2);
-    if (!visible) return;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = color;
-    for (let i = 1; i < trail.length; i++) {
-      const t = i / trail.length;
-      ctx.globalAlpha = t * 0.45;
-      ctx.lineWidth = t * radius * 0.8;
-      ctx.beginPath();
-      ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
-      ctx.lineTo(trail[i].x, trail[i].y);
-      ctx.stroke();
-    }
-    const glow = ctx.createRadialGradient(px, py, 0, px, py, radius * 2.6);
-    glow.addColorStop(0, color);
-    glow.addColorStop(1, "transparent");
-    ctx.globalAlpha = 0.45;
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(px, py, radius * 2.6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(px, py, Math.max(1.5, radius * 0.4), 0, Math.PI * 2);
-    ctx.fill();
-  };
-  frame();
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      cancelAnimationFrame(raf);
-      raf = 0;
-    } else if (!raf) {
-      frame();
-    }
-  });
-}
-
 export function init() {
   initHeader();
   initReveal();
   initMagnetic();
-  initCursor();
   revealPage();
 }
 

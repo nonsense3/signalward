@@ -50,7 +50,7 @@ const assets = new Map([
   ["/auth/callback", html("auth.html")],
   ["/verify", html("verify.html")],
   ...["base.css", "site.css", "app.css"].map((name) => [`/${name}`, [name, "text/css; charset=utf-8"]]),
-  ...["theme.js", "ui.js", "site.js", "scene.js", "shapes.js", "footer-logo.js", "console.js", "verify.js", "verify-page.js", "auth.js", "account.js"].map((name) => [`/${name}`, [name, "text/javascript; charset=utf-8"]]),
+  ...["theme.js", "ui.js", "site.js", "scene.js", "shapes.js", "console.js", "verify.js", "verify-page.js", "auth.js", "account.js"].map((name) => [`/${name}`, [name, "text/javascript; charset=utf-8"]]),
   ["/poster.svg", ["poster.svg", "image/svg+xml"]],
   ["/favicon.svg", ["favicon.svg", "image/svg+xml"]],
   ...["MonaSansVF.woff2", "HubotSansVF.woff2", "MonaspaceNeon-Regular.woff2"].map((name) => [`/fonts/${name}`, [`fonts/${name}`, "font/woff2"]]),
