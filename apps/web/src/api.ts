@@ -5,7 +5,7 @@ import { ScanInputError, memoryContext, primaryAction, runMessageScan, runReposi
 import { MESSAGE_LIMIT, SAMPLE_MESSAGES } from "../../../packages/fraud-scan/src/index.ts";
 import { LIMITS, type SourceFile } from "../../../packages/repo-scan/src/index.ts";
 import { remediatedRepository, syntheticRepository } from "../../../packages/repo-scan/src/fixture.ts";
-import { issueReceipt, trustedKeySet, verifyReceipt, type SigningKey } from "../../../packages/receipts/src/index.ts";
+import { issueReceipt, trustedKeySet, verifyReceipt, type SigningKey, type TrustedKey } from "../../../packages/receipts/src/index.ts";
 import { briefFor, type AiConfig } from "./ai.ts";
 import { checkPassword, type AuthProvider, type AuthResult, type SessionData, type User } from "./auth.ts";
 import { AppError, EMAIL, badRequest, forbidden, notFound, rateLimited, unauthorized, validate } from "./errors.ts";
@@ -22,6 +22,7 @@ export type ApiDeps = {
   cookieKey: Buffer;
   indicatorMaster: Buffer;
   signingKey: SigningKey;
+  previousSigningKeys: TrustedKey[];
   ai: AiConfig;
   publicUrl: string | null;
   secureCookies: boolean;
@@ -216,7 +217,7 @@ export function createApi(deps: ApiDeps) {
 
     if (path === "/api/verify" && method === "POST") {
       const body = await readJson(request, 2_000_000);
-      return ok(verifyReceipt(body.receipt, trustedKeySet(deps.signingKey).keys, body.report));
+      return ok(verifyReceipt(body.receipt, trustedKeySet(deps.signingKey, deps.previousSigningKeys).keys, body.report));
     }
 
     /* --- everything below requires a verified user --- */
@@ -285,7 +286,7 @@ export function createApi(deps: ApiDeps) {
 
     if (path === "/api/me/export" && method === "GET") {
       const [profile, reports, blocklist] = await Promise.all([deps.store.getProfile(actor), deps.store.exportReports(actor), deps.store.listBlocklist(actor)]);
-      return send(response, ctx, 200, { exportedAt: new Date().toISOString(), profile, reports, blocklist, trustedKeys: trustedKeySet(deps.signingKey) }, {
+      return send(response, ctx, 200, { exportedAt: new Date().toISOString(), profile, reports, blocklist, trustedKeys: trustedKeySet(deps.signingKey, deps.previousSigningKeys) }, {
         "Content-Disposition": `attachment; filename="signalward-export-${new Date().toISOString().slice(0, 10)}.json"`,
       });
     }
@@ -459,7 +460,7 @@ export function createApi(deps: ApiDeps) {
   async function handle(request: IncomingMessage, response: ServerResponse, path: string): Promise<boolean> {
     if (path === "/.well-known/signalward-keys.json") {
       response.writeHead(200, { ...SECURITY_HEADERS, "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" });
-      response.end(JSON.stringify(trustedKeySet(deps.signingKey)));
+      response.end(JSON.stringify(trustedKeySet(deps.signingKey, deps.previousSigningKeys)));
       return true;
     }
     if (!path.startsWith("/api/")) return false;

@@ -29,6 +29,7 @@ const api = createApi({
   cookieKey: deriveKey(sessionSecret, "signalward", "signalward/cookie/v1"),
   indicatorMaster: resolveSecret(config.secrets.indicator, config.stateDir, "indicator-master"),
   signingKey: loadSigningKey(config.stateDir, config.secrets.signing ? { SIGNALWARD_SIGNING_KEY: config.secrets.signing } : {}),
+  previousSigningKeys: config.previousSigningKeys,
   ai: config.ai,
   publicUrl: config.publicUrl,
   secureCookies: config.secureCookies,

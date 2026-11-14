@@ -157,12 +157,15 @@ signalward/
 | `SIGNALWARD_SESSION_SECRET` | production | Encrypts session cookies (32+ bytes, base64) |
 | `SIGNALWARD_INDICATOR_KEY` | production | HKDF master for per-account indicator tags |
 | `SIGNALWARD_SIGNING_KEY` | production | Base64 PKCS#8 DER Ed25519 receipt key |
+| `SIGNALWARD_PREVIOUS_SIGNING_KEYS` | optional | Base64url JSON public-key history retained for receipt verification after key rotation |
 | `PUBLIC_URL` | production | Origin for auth redirects and secure cookies |
 | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | for Supabase | Auth + database (anon key only, never service-role) |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | optional | Plain-language report summaries; falls back to rules |
 | `PORT`, `HOST`, `AUTH_PROVIDER`, `ALLOW_SIGNUP` | optional | Server and auth behaviour |
 
 Run `node apps/cli/signalward.ts doctor` to check everything at once.
+
+Rotate the receipt signing key with `node apps/cli/signalward.ts keys rotate`. Deploy both values it prints: the replacement private key and the previous public-key history. The public key endpoint and offline key exports include the active key plus retained previous keys, so older receipts continue to verify. Keep retired public keys for as long as their receipts must remain verifiable; the configured history supports up to 32 retired keys.
 
 ---
 

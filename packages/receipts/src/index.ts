@@ -36,6 +36,48 @@ export function reportDigest(report: Report): string {
 export type SigningKey = { keyId: string; privateKey: KeyObject; publicKey: KeyObject; publicX: string; createdAt: string };
 export type TrustedKey = { kid: string; alg: "Ed25519"; x: string; createdAt?: string };
 
+function keyIdForPublicX(x: string): string {
+  return `sw-ed25519-${sha256Hex(Buffer.from(x, "base64url")).slice(0, 12)}`;
+}
+
+/** Parse the base64url JSON public-key history used during signing-key rotation. */
+export function parseTrustedKeyHistory(encoded: string | null | undefined): TrustedKey[] {
+  if (!encoded) return [];
+  if (encoded.length > 16_384 || !/^[A-Za-z0-9_-]+$/.test(encoded)) throw new Error("SIGNALWARD_PREVIOUS_SIGNING_KEYS must be base64url-encoded JSON.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("SIGNALWARD_PREVIOUS_SIGNING_KEYS does not contain valid JSON.");
+  }
+  const entries = (parsed as { keys?: unknown } | null)?.keys;
+  if (!Array.isArray(entries) || entries.length > 32) throw new Error("SIGNALWARD_PREVIOUS_SIGNING_KEYS must contain a keys array with at most 32 entries.");
+  const seen = new Set<string>();
+  return entries.map((entry): TrustedKey => {
+    if (!entry || typeof entry !== "object") throw new Error("A previous signing key entry is invalid.");
+    const candidate = entry as Record<string, unknown>;
+    if (candidate.alg !== "Ed25519" || typeof candidate.kid !== "string" || typeof candidate.x !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(candidate.x)) {
+      throw new Error("Previous signing keys must include an Ed25519 kid and a 32-byte base64url public key.");
+    }
+    const raw = Buffer.from(candidate.x, "base64url");
+    if (raw.length !== 32 || raw.toString("base64url") !== candidate.x || candidate.kid !== keyIdForPublicX(candidate.x)) {
+      throw new Error("A previous signing key has an invalid public key or key ID.");
+    }
+    if (seen.has(candidate.kid)) throw new Error("Previous signing key IDs must be unique.");
+    seen.add(candidate.kid);
+    try {
+      const publicKey = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: candidate.x }, format: "jwk" });
+      if (publicKey.asymmetricKeyType !== "ed25519") throw new Error("wrong key type");
+    } catch {
+      throw new Error("A previous signing key is not a valid Ed25519 public key.");
+    }
+    if (candidate.createdAt !== undefined && (typeof candidate.createdAt !== "string" || candidate.createdAt.length > 80)) {
+      throw new Error("Previous signing key createdAt values must be strings of at most 80 characters.");
+    }
+    return { kid: candidate.kid, alg: "Ed25519", x: candidate.x, ...(typeof candidate.createdAt === "string" ? { createdAt: candidate.createdAt } : {}) };
+  });
+}
+
 function fromPrivate(privateKey: KeyObject, createdAt: string): SigningKey {
   const publicKey = createPublicKey(privateKey);
   const jwk = publicKey.export({ format: "jwk" });
@@ -65,8 +107,14 @@ export function loadSigningKey(stateDir: string, env: NodeJS.ProcessEnv = proces
   return fromPrivate(privateKey, createdAt);
 }
 
-export function trustedKeySet(key: SigningKey): { keys: TrustedKey[] } {
-  return { keys: [{ kid: key.keyId, alg: "Ed25519", x: key.publicX, createdAt: key.createdAt }] };
+export function trustedKeySet(key: SigningKey, previous: readonly TrustedKey[] = []): { keys: TrustedKey[] } {
+  const keys: TrustedKey[] = [{ kid: key.keyId, alg: "Ed25519", x: key.publicX, createdAt: key.createdAt }];
+  for (const candidate of previous) {
+    if (candidate.kid === key.keyId) continue;
+    if (keys.some((item) => item.kid === candidate.kid)) throw new Error(`Duplicate trusted signing key ID: ${candidate.kid}`);
+    keys.push(candidate);
+  }
+  return { keys };
 }
 
 export function issueReceipt(report: Report, action: string, key: SigningKey, now = new Date()): Receipt {

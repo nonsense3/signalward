@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { parseTrustedKeyHistory, type TrustedKey } from "../../../packages/receipts/src/index.ts";
 
 /**
  * Environment loading and strict validation. Every problem is collected and reported together so a
@@ -15,6 +16,7 @@ export type Config = {
   stateDir: string;
   secureCookies: boolean;
   secrets: { session: string | null; indicator: string | null; signing: string | null };
+  previousSigningKeys: TrustedKey[];
   auth: {
     provider: AuthProviderKind;
     allowSignup: boolean;
@@ -105,6 +107,12 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
     indicator: blank(env.SIGNALWARD_INDICATOR_KEY),
     signing: blank(env.SIGNALWARD_SIGNING_KEY),
   };
+  let previousSigningKeys: TrustedKey[] = [];
+  try {
+    previousSigningKeys = parseTrustedKeyHistory(blank(env.SIGNALWARD_PREVIOUS_SIGNING_KEYS));
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : "SIGNALWARD_PREVIOUS_SIGNING_KEYS is invalid.");
+  }
   for (const [name, value] of [["SIGNALWARD_SESSION_SECRET", secrets.session], ["SIGNALWARD_INDICATOR_KEY", secrets.indicator]] as const) {
     if (value === null) {
       if (production) problems.push(`${name} is required in production. Generate one with: node apps/cli/signalward.ts keys`);
@@ -172,6 +180,7 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
     stateDir: blank(env.SIGNALWARD_STATE_DIR) ?? defaults.stateDir,
     secureCookies: production || (publicUrl?.startsWith("https://") ?? false),
     secrets,
+    previousSigningKeys,
     auth: { provider, allowSignup: allowSignupRaw === "true", supabase: provider === "supabase" ? supabase : null },
     ai: { apiKey: aiKey, model, timeoutMs },
     warnings,

@@ -5,6 +5,7 @@
  *   node apps/cli/signalward.ts url <link> [--json]
  *   node apps/cli/signalward.ts verify <receipt.json> [--report <report.json>] [--keys <keys.json>]
  *   node apps/cli/signalward.ts keys       print fresh values for the three SignalWard secrets
+ *   node apps/cli/signalward.ts keys rotate # rotate receipt key and retain old public keys
  *   node apps/cli/signalward.ts doctor     validate .env and test Supabase and Gemini connectivity
  * Exit codes: 0 pass or valid, 1 block or invalid, 2 incomplete, usage or runtime error.
  */
@@ -14,7 +15,7 @@ import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Report } from "../../packages/contracts/src/index.ts";
 import { ScanInputError, memoryContext, primaryAction, runRepositoryScan, runUrlScan } from "../../packages/engine/src/index.ts";
-import { issueReceipt, loadSigningKey, trustedKeySet, verifyReceipt, type TrustedKey } from "../../packages/receipts/src/index.ts";
+import { issueReceipt, loadSigningKey, parseTrustedKeyHistory, trustedKeySet, verifyReceipt, type TrustedKey } from "../../packages/receipts/src/index.ts";
 import { readDirectory } from "../../packages/repo-scan/src/index.ts";
 import { ConfigError, loadEnvFile, readConfig } from "../web/src/env.ts";
 
@@ -32,6 +33,7 @@ const color = process.stdout.isTTY && !process.env.NO_COLOR;
 const paint = (code: string, text: string) => (color ? `\u001b[${code}m${text}\u001b[0m` : text);
 const SEVERITY_COLOR: Record<string, string> = { critical: "91", high: "31", medium: "33", low: "35", info: "90" };
 const signingKey = () => loadSigningKey(stateDir, env.SIGNALWARD_SIGNING_KEY ? { SIGNALWARD_SIGNING_KEY: env.SIGNALWARD_SIGNING_KEY } : {});
+const previousSigningKeys = () => parseTrustedKeyHistory(env.SIGNALWARD_PREVIOUS_SIGNING_KEYS);
 
 function printReport(report: Report) {
   console.log(`${paint("1", "SignalWard")} ${report.kind} ${report.id}  ${report.policyVersion}`);
@@ -56,7 +58,7 @@ function emit(report: Report): void {
     mkdirSync(out, { recursive: true });
     writeFileSync(join(out, `${report.id}.report.json`), JSON.stringify(report, null, 2));
     writeFileSync(join(out, `${report.id}.receipt.json`), JSON.stringify(receipt, null, 2));
-    writeFileSync(join(out, "signalward-keys.json"), JSON.stringify(trustedKeySet(key), null, 2));
+    writeFileSync(join(out, "signalward-keys.json"), JSON.stringify(trustedKeySet(key, previousSigningKeys()), null, 2));
   }
   if (has("--json")) console.log(JSON.stringify({ report, receipt }, null, 2));
   else {
@@ -126,13 +128,25 @@ async function main(): Promise<number> {
     const receipt = JSON.parse(readFileSync(args[1], "utf8"));
     const reportPath = flag("--report");
     const keysPath = flag("--keys");
-    const keys: TrustedKey[] = keysPath ? JSON.parse(readFileSync(keysPath, "utf8")).keys : trustedKeySet(signingKey()).keys;
+    const keys: TrustedKey[] = keysPath ? JSON.parse(readFileSync(keysPath, "utf8")).keys : trustedKeySet(signingKey(), previousSigningKeys()).keys;
     const result = verifyReceipt(receipt, keys, reportPath ? JSON.parse(readFileSync(reportPath, "utf8")) : undefined);
     for (const check of result.checks) console.log(`  ${check.ok ? paint("32", "✓") : paint("31", "✕")} ${check.check.padEnd(14)} ${check.detail}`);
     console.log(result.valid ? paint("32", "\n  Receipt is valid.") : paint("31", "\n  Receipt is NOT valid."));
     return result.valid ? 0 : 1;
   }
   if (command === "keys") {
+    if (args[1] === "rotate") {
+      const current = trustedKeySet(signingKey()).keys[0]!;
+      const previous = [current, ...previousSigningKeys().filter((key) => key.kid !== current.kid)];
+      if (previous.length > 32) throw new Error("Key history already contains 32 keys. Archive retired public keys before rotating again.");
+      const { privateKey } = generateKeyPairSync("ed25519");
+      const history = Buffer.from(JSON.stringify({ keys: previous })).toString("base64url");
+      console.log("# Replace SIGNALWARD_SIGNING_KEY with the new private key and retain the old public keys below.");
+      console.log("# Keep SIGNALWARD_PREVIOUS_SIGNING_KEYS configured until receipts signed by those keys no longer need verification.");
+      console.log(`SIGNALWARD_SIGNING_KEY=${privateKey.export({ format: "der", type: "pkcs8" }).toString("base64")}`);
+      console.log(`SIGNALWARD_PREVIOUS_SIGNING_KEYS=${history}`);
+      return 0;
+    }
     const { privateKey } = generateKeyPairSync("ed25519");
     console.log("# Paste into .env. Store production values in your secret manager, not in Git.");
     console.log(`SIGNALWARD_SESSION_SECRET=${randomBytes(32).toString("base64")}`);
