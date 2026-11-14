@@ -1,4 +1,4 @@
-export const POLICY_VERSION = "signalward-policy-2026.11.2";
+export const POLICY_VERSION = "signalward-policy-2026.11.3";
 
 export type RepositoryFinding = {
   category: "secret" | "dependency" | "configuration";
@@ -58,27 +58,27 @@ export function actionsFor(
     switch (verdict) {
       case "block":
         return [
-          { action: "fail_commit_status", detail: "Report a failing status for this commit so it cannot merge.", mode: "automatic" },
+          { action: "block_scan", detail: "Return a blocking verdict; the CLI exits non-zero. Connect a CI provider to enforce merge protection.", mode: "automatic" },
           { action: "rotate_credential", detail: "Revoke and rotate every exposed credential, then purge it from history.", mode: "recommended" },
         ];
       case "incomplete":
         return [{ action: "hold_for_review", detail: "Coverage was partial. Re-run with the skipped detectors before trusting a pass.", mode: "recommended" }];
       default:
-        return [{ action: "pass_commit_status", detail: "Report a passing status. Advisory findings stay visible for follow-up.", mode: "automatic" }];
+        return [{ action: "pass_scan", detail: "Return a passing scan verdict. This does not publish a commit status to a hosting provider.", mode: "automatic" }];
     }
   }
   switch (verdict) {
     case "high_risk":
       return [
-        { action: "quarantine", detail: "Hide the message or link from recipients until an analyst reviews it.", mode: "automatic" },
+        { action: "block_indicators", detail: "Add high-confidence URL, domain, or IP indicators cited by high-risk findings to this workspace blocklist.", mode: "recommended" },
+        { action: "warn_recipient", detail: "Show the high-risk verdict and evidence to the analyst; verify through a trusted channel.", mode: "automatic" },
         { action: "hold_payment", detail: "Do not pay or share codes. Confirm through a channel you already trust.", mode: "recommended" },
-        { action: "block_indicators", detail: "Add the extracted indicators to the workspace blocklist.", mode: "recommended" },
       ];
     case "suspicious":
       return [{ action: "warn_recipient", detail: "Show a warning with the evidence and ask the recipient to verify independently.", mode: "automatic" }];
     case "inconclusive":
       return [{ action: "hold_for_review", detail: "Some checks could not run. Treat the content as unverified.", mode: "recommended" }];
     default:
-      return [{ action: "deliver", detail: "No fraud pattern found. Deliver normally and keep the evidence.", mode: "automatic" }];
+      return [{ action: "no_blocking_signal", detail: "No configured fraud rule produced a blocking signal; this scan does not deliver or approve the content.", mode: "automatic" }];
   }
 }

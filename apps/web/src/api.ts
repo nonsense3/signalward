@@ -348,6 +348,51 @@ export function createApi(deps: ApiDeps) {
       } else {
         throw notFound("Unknown scan type.");
       }
+      if (report.kind !== "repository" && report.verdict === "high_risk") {
+        const action = report.mitigations.find((item) => item.action === "block_indicators");
+        if (action) {
+          const evidence = report.findings
+            .filter((item) => (item.severity === "high" || item.severity === "critical") && item.confidence === "high")
+            .flatMap((item) => [item.title, ...item.evidence.map((entry) => entry.value)])
+            .map((value) => value.toLowerCase());
+          const candidates = report.indicators.filter((item) =>
+            ["url", "domain", "ipv4"].includes(item.type) &&
+            evidence.some((value) => value.includes(item.display.toLowerCase())),
+          );
+          let applied = 0;
+          let failed = 0;
+          for (const indicator of candidates) {
+            try {
+              await deps.store.addBlock(actor, {
+                tag: indicator.tag,
+                type: indicator.type,
+                display: indicator.display,
+                reportId: report.id,
+                addedAt: new Date().toISOString(),
+              });
+              indicator.blocked = true;
+              applied += 1;
+            } catch (error) {
+              failed += 1;
+              console.warn(`[${ctx.rid}] automatic indicator block failed: ${error instanceof Error ? error.name : "unknown error"}`);
+            }
+          }
+          if (applied > 0) broadcast(actor.userId, { type: "blocklist.added", automatic: true, count: applied });
+          if (failed) {
+            action.mode = "recommended";
+            action.status = "failed";
+            action.detail = `Blocklist update failed for ${failed} indicator(s); ${applied} were added. Review the blocklist and retry failed entries.`;
+          } else if (applied) {
+            action.mode = "automatic";
+            action.status = "applied";
+            action.detail = `Automatically added ${applied} high-confidence URL, domain, or IP indicator(s) to this workspace blocklist. Future matching scans will be flagged.`;
+          } else {
+            action.mode = "recommended";
+            action.status = "not_applicable";
+            action.detail = "No URL, domain, or IP indicator was directly cited by a high-confidence blocking finding. Review the evidence and add any confirmed indicators manually.";
+          }
+        }
+      }
       const receipt = issueReceipt(report, primaryAction(report), deps.signingKey);
       const brief = await briefFor(report, deps.ai, (message) => console.warn(`[${ctx.rid}] ${message}`));
       const stored: StoredReport = { report, receipt, brief };

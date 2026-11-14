@@ -131,6 +131,17 @@ function render(stored, { scroll = true } = {}) {
       h("div", { class: "findings" }, report.threatAssessment.scenarios.map((scenario) => threatScenarioRow(scenario, report.findings))),
       report.threatAssessment.coverageLimitations.length ? h("p", { class: "muted", text: `Coverage limits: ${report.threatAssessment.coverageLimitations.join("; ")}` }) : null) : null,
 
+    report.mitigations?.length ? h("section", { class: "card", "aria-labelledby": "mitigations-title" },
+      h("div", { class: "card-head" }, h("h3", { id: "mitigations-title", text: "Mitigations" }), h("span", { class: "meta", text: "actions and outcomes" })),
+      h("div", { class: "findings" }, report.mitigations.map((item) => {
+        const status = item.status ?? (item.mode === "automatic" ? "applied" : "recommended");
+        const tone = status === "applied" ? "success" : status === "failed" ? "danger" : status === "not_applicable" ? "info" : "warning";
+        return h("div", { class: "finding" },
+          h("div", { class: "finding__body", css: { padding: "1rem" } },
+            h("p", {}, h("span", { class: `tag tag--${tone}`, text: status.replace(/_/g, " ") }), " ", h("strong", { text: item.action.replace(/_/g, " ") })),
+            h("p", { text: item.detail })));
+      }))) : null,
+
     report.indicators.length ? h("section", { class: "card", "aria-labelledby": "ind-title" },
       h("div", { class: "card-head" }, h("h3", { id: "ind-title", text: "Indicators" }), h("span", { class: "meta", text: "private tags" })),
       h("div", { class: "indicators" }, report.indicators.filter((item) => item.type !== "amount").map((item) => indicatorChip(item, report.id)))) : null,

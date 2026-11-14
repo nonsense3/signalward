@@ -72,6 +72,8 @@ export type Mitigation = {
   detail: string;
   /** "automatic" actions were applied by the scanner; "recommended" actions need a person. */
   mode: "automatic" | "recommended";
+  /** Outcome in this report; absent on older stored reports. */
+  status?: "applied" | "recommended" | "failed" | "not_applicable";
 };
 
 /** Deterministic threat scenario derived from scan findings and detector coverage. */

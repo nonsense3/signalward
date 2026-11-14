@@ -49,7 +49,11 @@ class Timer {
 }
 
 function mitigations(kind: Report["kind"], verdict: Report["verdict"]): Mitigation[] {
-  return actionsFor(kind, verdict as never).map((item, index) => ({ id: `M${index + 1}`, ...item }));
+  return actionsFor(kind, verdict as never).map((item, index) => ({
+    id: `M${index + 1}`,
+    ...item,
+    status: item.mode === "automatic" ? "applied" : "recommended",
+  }));
 }
 
 export function runRepositoryScan(files: readonly SourceFile[], label: string, ctx: WorkspaceContext): Report {
@@ -102,7 +106,7 @@ async function protectIndicators(raw: readonly RawIndicator[], ctx: WorkspaceCon
     if (blocked) {
       findings.push(finding({ ruleId: "intelligence.workspace_blocklist", category: "intelligence", severity: "high", confidence: "high",
         title: `Blocked ${item.type.replace("_", " ")} reappeared`, description: `${item.display} matches an indicator an analyst blocked in this workspace.`,
-        impact: "The same infrastructure is being reused against your users.", remediation: "Quarantine the content and notify the recipients who received it.",
+        impact: "The same infrastructure is being reused against your users.", remediation: "Review this report, keep the indicator blocked, and notify affected recipients through a trusted channel.",
         evidence: [{ label: "Indicator", value: item.display }, { label: "Tag", value: tag }] }));
     } else if (seenBefore >= 2 && item.type !== "amount") {
       findings.push(finding({ ruleId: "intelligence.repeated_indicator", category: "intelligence", severity: "info", confidence: "medium",
@@ -115,7 +119,7 @@ async function protectIndicators(raw: readonly RawIndicator[], ctx: WorkspaceCon
 }
 
 const FRAUD_SUMMARY: Record<string, string> = {
-  high_risk: "High risk: the content matches a fraud pattern. It was quarantined.",
+  high_risk: "High risk: the content matches a fraud pattern. Review the evidence and check mitigation outcomes.",
   suspicious: "Suspicious: some signals need a person to verify independently.",
   low_risk: "Low risk: no fraud pattern found in the checks that ran.",
   inconclusive: "Inconclusive: required checks could not run.",

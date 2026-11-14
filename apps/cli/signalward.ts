@@ -45,7 +45,7 @@ function printReport(report: Report) {
   }
   if (!report.findings.length) console.log("  No findings.");
   console.log(`\n  ${paint("1", report.verdict.toUpperCase())}  ${report.summary}`);
-  for (const mitigation of report.mitigations) console.log(`  ${paint("90", `[${mitigation.mode}]`)} ${mitigation.action}: ${mitigation.detail}`);
+  for (const mitigation of report.mitigations) console.log(`  ${paint("90", `[${mitigation.status ?? mitigation.mode}]`)} ${mitigation.action}: ${mitigation.detail}`);
 }
 
 function emit(report: Report): void {
