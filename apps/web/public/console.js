@@ -176,79 +176,25 @@ async function runScan(kind, body, frame) {
   } finally {
     frame?.classList.remove("scanning");
     buttons.forEach((button) => (button.disabled = false));
-    $("#scan-repo").disabled = !selection.length;
   }
 }
 
-/* ---------- Repository intake ---------- */
-const SKIP_DIRS = new Set(["node_modules", ".git", ".hg", ".svn", "dist", "build", ".next", "out", "coverage", "vendor", ".venv", "venv", "__pycache__", ".signalward", ".turbo", ".cache"]);
-const BINARY = /\.(png|jpe?g|gif|webp|avif|ico|bmp|tiff?|psd|pdf|zip|gz|tgz|bz2|xz|7z|rar|jar|war|class|exe|dll|so|dylib|o|a|wasm|woff2?|ttf|otf|eot|mp[34]|mov|avi|webm|ogg|wav|flac|glb|gltf|bin|dat|db|sqlite|lockb)$/i;
-const MAX_FILES = 2000, MAX_FILE = 1_000_000, MAX_TOTAL = 12_000_000;
-let selection = [];
-let selectionLabel = "uploaded files";
-
-async function setSelection(entries, label) {
-  $("#repo-meta").textContent = "Reading files…";
-  const files = [];
-  let total = 0, skipped = 0;
-  for (const { path, file } of entries) {
-    const keep = !path.split("/").some((part) => SKIP_DIRS.has(part)) && !BINARY.test(path) && file.size <= MAX_FILE;
-    if (!keep || files.length >= MAX_FILES || total + file.size > MAX_TOTAL) { skipped++; continue; }
-    total += file.size;
-    try {
-      files.push({ path, content: await file.text() });
-    } catch {
-      skipped++;
-    }
-  }
-  selection = files;
-  selectionLabel = label;
-  $("#repo-meta").textContent = files.length
-    ? `${label} · ${files.length} files · ${(total / 1024).toFixed(0)} KB${skipped ? ` · ${skipped} skipped` : ""}`
-    : "No readable text files in that selection.";
-  $("#scan-repo").disabled = !files.length;
-  if (!files.length && entries.length) toast("warning", "Nothing to scan", "Every file was skipped as binary, too large or build output.");
-}
-for (const input of [$("#pick-folder"), $("#pick-files")]) {
-  input.addEventListener("change", () => {
-    const list = [...input.files];
-    const root = list[0]?.webkitRelativePath?.split("/")[0];
-    setSelection(list.map((file) => ({ path: file.webkitRelativePath ? file.webkitRelativePath.split("/").slice(1).join("/") || file.name : file.name, file })), root || "selected files");
-    input.value = "";
-  });
-}
-async function walkEntry(entry, prefix, out) {
-  if (out.length > MAX_FILES * 2) return;
-  if (entry.isFile) out.push({ path: `${prefix}${entry.name}`, file: await new Promise((resolve, reject) => entry.file(resolve, reject)) });
-  else if (entry.isDirectory && !SKIP_DIRS.has(entry.name)) {
-    const reader = entry.createReader();
-    let batch;
-    do {
-      batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
-      for (const child of batch) await walkEntry(child, `${prefix}${entry.name}/`, out);
-    } while (batch.length);
-  }
-}
-const drop = $("#drop");
-drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("is-over"); });
-drop.addEventListener("dragleave", () => drop.classList.remove("is-over"));
-drop.addEventListener("drop", async (event) => {
+/* ---------- Repository (by URL) ---------- */
+$("#repo-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  drop.classList.remove("is-over");
-  try {
-    const items = [...event.dataTransfer.items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
-    const out = [];
-    for (const entry of items) await walkEntry(entry, "", out);
-    const single = items.length === 1 && items[0].isDirectory ? `${items[0].name}/` : "";
-    await setSelection(out.map(({ path, file }) => ({ path: single && path.startsWith(single) ? path.slice(single.length) : path, file })), single ? items[0].name : "dropped files");
-  } catch {
-    toast("error", "Couldn't read the drop", "Your browser blocked access to those files. Use Choose folder instead.");
+  const form = event.currentTarget;
+  const url = form.elements.url.value.trim();
+  if (!url) return setFieldError(form.elements.url, "Enter a Git repository URL.");
+  if (!/^https?:\/\/[\w.-]+\/[\w.-]+\/[\w.-]+/i.test(url) && !/^[\w.-]+\/[\w.-]+$/.test(url)) {
+    return setFieldError(form.elements.url, "Use a link like https://github.com/owner/repo.");
   }
+  const ref = form.elements.ref.value.trim();
+  const token = form.elements.token.value.trim();
+  if (token) form.elements.token.value = ""; // never keep the token in the DOM after submit
+  runScan("repository", { url, ...(ref ? { ref } : {}), ...(token ? { token } : {}) }, form);
 });
-$("#scan-repo").addEventListener("click", () => runScan("repository", { files: selection, label: selectionLabel }, $('[data-panel="repository"]')));
-for (const button of $$("[data-repo-sample]")) button.addEventListener("click", () => runScan("repository", { sample: button.dataset.repoSample }, $('[data-panel="repository"]')));
 
-/* ---------- Message and link intake ---------- */
+/* ---------- Message and link ---------- */
 $("#message-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -256,17 +202,12 @@ $("#message-form").addEventListener("submit", (event) => {
   if (!text) return setFieldError(form.elements.text, "Paste the message you want to check.");
   runScan("message", { text, sender: form.elements.sender.value.trim(), subject: form.elements.subject.value.trim() }, form);
 });
-for (const button of $$("[data-message-sample]")) button.addEventListener("click", () => runScan("message", { sample: button.dataset.messageSample }, $("#message-form")));
 $("#url-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const url = form.elements.url.value.trim();
   if (!url) return setFieldError(form.elements.url, "Enter a link or domain.");
   runScan("url", { url }, form);
-});
-for (const chip of $$("[data-url-sample]")) chip.addEventListener("click", () => {
-  $("#url-form").elements.url.value = chip.dataset.urlSample;
-  runScan("url", { url: chip.dataset.urlSample }, $("#url-form"));
 });
 
 /* ---------- Activity ---------- */

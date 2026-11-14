@@ -23,6 +23,7 @@ export type Config = {
     supabase: { url: string; anonKey: string } | null;
   };
   ai: { apiKey: string | null; model: string; timeoutMs: number };
+  urlIntel: boolean;
   warnings: string[];
 };
 
@@ -170,6 +171,9 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 30000) problems.push("GEMINI_TIMEOUT_MS must be between 1000 and 30000.");
   if (!aiKey) warnings.push("GEMINI_API_KEY is empty; report summaries use the deterministic fallback.");
 
+  const urlIntelRaw = blank(env.URL_INTEL) ?? "on";
+  if (!["on", "off"].includes(urlIntelRaw)) problems.push("URL_INTEL must be on or off.");
+
   if (problems.length) throw new ConfigError(problems);
 
   return {
@@ -183,6 +187,7 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
     previousSigningKeys,
     auth: { provider, allowSignup: allowSignupRaw === "true", supabase: provider === "supabase" ? supabase : null },
     ai: { apiKey: aiKey, model, timeoutMs },
+    urlIntel: urlIntelRaw === "on",
     warnings,
   };
 }

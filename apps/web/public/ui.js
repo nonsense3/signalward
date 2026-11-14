@@ -315,17 +315,6 @@ function initReveal() {
   for (const el of $$("[data-reveal]")) observer.observe(el);
 }
 
-function initMagnetic() {
-  if (reducedMotion() || !matchMedia("(pointer: fine)").matches) return;
-  for (const el of $$("[data-magnetic]")) {
-    el.addEventListener("pointermove", (event) => {
-      const rect = el.getBoundingClientRect();
-      el.style.transform = `translate(${(event.clientX - rect.left - rect.width / 2) * 0.18}px, ${(event.clientY - rect.top - rect.height / 2) * 0.28}px)`;
-    });
-    el.addEventListener("pointerleave", () => (el.style.transform = ""));
-  }
-}
-
 function cssVar(name, fallback) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 }
@@ -414,7 +403,6 @@ function initCursor() {
 export function init() {
   initHeader();
   initReveal();
-  initMagnetic();
   initCursor();
   revealPage();
 }

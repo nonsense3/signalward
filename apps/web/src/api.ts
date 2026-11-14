@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Report } from "../../../packages/contracts/src/index.ts";
-import { ScanInputError, memoryContext, primaryAction, runMessageScan, runRepositoryScan, runUrlScan, type WorkspaceContext } from "../../../packages/engine/src/index.ts";
-import { MESSAGE_LIMIT, SAMPLE_MESSAGES } from "../../../packages/fraud-scan/src/index.ts";
-import { LIMITS, type SourceFile } from "../../../packages/repo-scan/src/index.ts";
-import { remediatedRepository, syntheticRepository } from "../../../packages/repo-scan/src/fixture.ts";
+import { ScanInputError, primaryAction, runMessageScan, runRepositoryScan, runUrlScan, type WorkspaceContext } from "../../../packages/engine/src/index.ts";
+import { MESSAGE_LIMIT } from "../../../packages/fraud-scan/src/index.ts";
+import { RepoFetchError, fetchRepository } from "../../../packages/repo-fetch/src/index.ts";
+import { domainAgeFinding } from "../../../packages/url-intel/src/index.ts";
 import { issueReceipt, trustedKeySet, verifyReceipt, type SigningKey, type TrustedKey } from "../../../packages/receipts/src/index.ts";
 import { briefFor, type AiConfig } from "./ai.ts";
 import { checkPassword, type AuthProvider, type AuthResult, type SessionData, type User } from "./auth.ts";
@@ -27,6 +27,8 @@ export type ApiDeps = {
   publicUrl: string | null;
   secureCookies: boolean;
   allowSignup: boolean;
+  /** Enable network-backed URL enrichment (RDAP domain age). Never fetches the link itself. */
+  urlIntel: boolean;
 };
 
 type Ctx = { rid: string; ip: string; setCookies: string[]; origin: string };
@@ -229,15 +231,6 @@ export function createApi(deps: ApiDeps) {
       return ok({ status: "signed_out" });
     }
 
-    if (path === "/api/sample-scan" && method === "POST") {
-      const report = runRepositoryScan(syntheticRepository(), "synthetic fixture", memoryContext("public_demo", randomBytes(32)));
-      const top = report.findings.find((item) => item.category === "secret");
-      return ok({
-        fixture: true, result: report.verdict, summary: report.summary, findings: report.findings.length,
-        finding: top && { title: top.title, location: `${top.location?.path}:${top.location?.line}`, evidence: top.evidence[0]?.value, remediation: top.remediation },
-      });
-    }
-
     if (path === "/api/verify" && method === "POST") {
       const body = await readJson(request, 2_000_000);
       return ok(verifyReceipt(body.receipt, trustedKeySet(deps.signingKey, deps.previousSigningKeys).keys, body.report));
@@ -330,41 +323,37 @@ export function createApi(deps: ApiDeps) {
       const ws = workspaceContext(actor);
       let report: Report;
       if (kind === "repository") {
-        const body = validate<{ sample: string; label: string; files: unknown[] }>(await readJson(request, LIMITS.maxTotalBytes + 2_000_000), {
-          sample: { type: "string", max: 20, pattern: /^(vulnerable|remediated)$/, label: "Sample" },
-          label: { type: "string", max: 120, label: "Label" },
-          files: { type: "array", max: LIMITS.maxFiles, label: "Files" },
+        const body = validate<{ url: string; ref: string; token: string }>(await readJson(request, 8192), {
+          url: { type: "string", required: true, max: 300, label: "Repository URL" },
+          ref: { type: "string", max: 120, label: "Branch or tag" },
+          token: { type: "string", max: 200, label: "GitHub token" },
         });
         broadcast(actor.userId, { type: "scan.started", kind });
-        if (body.sample === "vulnerable") report = runRepositoryScan(syntheticRepository(), "synthetic fixture (vulnerable)", ws);
-        else if (body.sample === "remediated") report = runRepositoryScan(remediatedRepository(), "synthetic fixture (remediated)", ws);
-        else {
-          if (!body.files?.length) throw badRequest("NO_FILES", "Choose a folder or files to scan.", "files");
-          const files: SourceFile[] = body.files.map((item, index) => {
-            const file = item as { path?: unknown; content?: unknown };
-            if (typeof file?.path !== "string" || typeof file.content !== "string") throw badRequest("INVALID_FILE", `File ${index + 1} needs a path and text content.`, "files");
-            return { path: file.path, content: file.content };
-          });
-          report = runRepositoryScan(files, body.label ?? "uploaded files", ws);
+        let fetched;
+        try {
+          fetched = await fetchRepository(body.url, { ...(body.ref ? { ref: body.ref } : {}), ...(body.token ? { token: body.token } : {}) });
+        } catch (error) {
+          if (error instanceof RepoFetchError) throw new AppError(error.status, error.code, error.message, { field: "url" });
+          throw error;
+        }
+        report = runRepositoryScan(fetched.files, fetched.label, ws);
+        if (fetched.truncated && report.scope.kind === "repository") {
+          report.coverage.push({ detector: "repository_snapshot", status: "partial", detail: "The repository is large; the snapshot was truncated before scanning.", required: false });
         }
       } else if (kind === "message") {
-        const body = validate<{ sample: string; text: string; sender: string; subject: string }>(await readJson(request, 200_000), {
-          sample: { type: "string", max: 10, pattern: /^(scam|benign)$/, label: "Sample" },
-          text: { type: "string", max: MESSAGE_LIMIT, label: "Message" },
+        const body = validate<{ text: string; sender: string; subject: string }>(await readJson(request, 200_000), {
+          text: { type: "string", required: true, max: MESSAGE_LIMIT, label: "Message" },
           sender: { type: "string", max: 320, label: "Sender" },
           subject: { type: "string", max: 500, label: "Subject" },
         });
         broadcast(actor.userId, { type: "scan.started", kind });
-        if (body.sample === "scam" || body.sample === "benign") report = await runMessageScan({ ...SAMPLE_MESSAGES[body.sample] }, ws);
-        else {
-          if (!body.text) throw badRequest("FIELD_REQUIRED", "Paste the message text to analyse.", "text");
-          report = await runMessageScan({ text: body.text, ...(body.sender ? { sender: body.sender } : {}), ...(body.subject ? { subject: body.subject } : {}) }, ws);
-        }
+        report = await runMessageScan({ text: body.text, ...(body.sender ? { sender: body.sender } : {}), ...(body.subject ? { subject: body.subject } : {}) }, ws);
       } else if (kind === "url") {
         const body = validate<{ url: string }>(await readJson(request, 8192), { url: { type: "string", required: true, max: 2048, label: "Link" } });
         broadcast(actor.userId, { type: "scan.started", kind });
         try {
-          report = await runUrlScan(body.url, ws);
+          const domainAge = deps.urlIntel ? (domain: string) => domainAgeFinding(domain, { timeoutMs: deps.ai.timeoutMs }) : undefined;
+          report = await runUrlScan(body.url, ws, domainAge ? { domainAge } : {});
         } catch (error) {
           if (error instanceof ScanInputError) throw new AppError(422, error.code, error.message, { field: "url" });
           throw error;

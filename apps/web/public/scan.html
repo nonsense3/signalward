@@ -37,21 +37,17 @@
 
     <div class="grid-12" id="workspace">
       <div class="span-5 stack">
-        <section class="card intake" data-panel="repository" aria-labelledby="repo-title">
+        <form class="card intake" data-panel="repository" aria-labelledby="repo-title" id="repo-form" novalidate>
           <div class="card-head"><h2 id="repo-title">Repository</h2><span class="meta">secrets · deps · CI</span></div>
-          <div class="drop" id="drop">
-            <span class="drop__orb" aria-hidden="true"></span>
-            <b>Drop a project folder</b>
-            <p class="muted">Build output, <code>node_modules</code> and binaries are skipped.</p>
-            <div class="row">
-              <label class="pill pill--dark pill--sm">Choose folder<input class="sr-only" id="pick-folder" type="file" webkitdirectory multiple></label>
-              <label class="pill pill--line pill--sm">Files<input class="sr-only" id="pick-files" type="file" multiple></label>
-            </div>
-          </div>
-          <div class="selection"><span id="repo-meta">Nothing selected.</span><button class="pill pill--accent pill--sm" id="scan-repo" type="button" disabled>Scan</button></div>
-          <div class="samples">Try: <button class="chip" type="button" data-repo-sample="vulnerable">Vulnerable sample</button><button class="chip" type="button" data-repo-sample="remediated">Fixed sample</button></div>
-          <p class="fineprint">Scanned in memory on this server. Only the redacted report is saved.</p>
-        </section>
+          <label class="field"><span>Git repository URL</span><input name="url" autocomplete="off" spellcheck="false" maxlength="300" placeholder="https://github.com/owner/repo" required></label>
+          <details class="advanced" id="repo-advanced">
+            <summary>Branch, or a private repository</summary>
+            <label class="field"><span>Branch or tag <em>optional</em></span><input name="ref" autocomplete="off" spellcheck="false" maxlength="120" placeholder="main"></label>
+            <label class="field"><span>GitHub token <em>optional — for private repos, used once and never stored</em></span><input name="token" type="password" autocomplete="off" maxlength="200" placeholder="github_pat_…"></label>
+          </details>
+          <button class="pill pill--dark pill--lg" type="submit">Scan repository<span class="arrow" aria-hidden="true"></span></button>
+          <p class="fineprint">The server downloads the repository snapshot, scans it in memory, and keeps only the redacted report. Connect a private repo with a fine-grained GitHub token (read-only contents).</p>
+        </form>
 
         <form class="card intake" data-panel="message" aria-labelledby="msg-title" id="message-form" novalidate hidden>
           <div class="card-head"><h2 id="msg-title">Message</h2><span class="meta">SMS · email · chat</span></div>
@@ -59,7 +55,6 @@
           <label class="field"><span>Sender <em>optional</em></span><input name="sender" autocomplete="off" maxlength="320" placeholder="alerts@example.com"></label>
           <label class="field"><span>Subject <em>optional</em></span><input name="subject" autocomplete="off" maxlength="500"></label>
           <button class="pill pill--dark pill--lg" type="submit">Analyse<span class="arrow" aria-hidden="true"></span></button>
-          <div class="samples">Try: <button class="chip" type="button" data-message-sample="scam">Synthetic scam</button><button class="chip" type="button" data-message-sample="benign">Real OTP notice</button></div>
           <p class="fineprint">Phone numbers, UPI IDs, IBANs and wallets become private tags. Raw values are discarded.</p>
         </form>
 
@@ -67,12 +62,7 @@
           <div class="card-head"><h2 id="url-title">Link</h2><span class="meta">never fetched</span></div>
           <label class="field"><span>Link or domain</span><input name="url" autocomplete="off" spellcheck="false" maxlength="2048" placeholder="hxxps://example[.]com/login"></label>
           <button class="pill pill--dark pill--lg" type="submit">Check link<span class="arrow" aria-hidden="true"></span></button>
-          <div class="samples">Try:
-            <button class="chip" type="button" data-url-sample="https://paypa1-login.com/verify">paypa1-login.com</button>
-            <button class="chip" type="button" data-url-sample="https://xn--pypal-4ve.com/">xn--pypal-4ve.com</button>
-            <button class="chip" type="button" data-url-sample="https://accounts.google.com.secure-check.top/signin">google.com.secure-check.top</button>
-            <button class="chip" type="button" data-url-sample="https://www.paypal.com/signin">paypal.com</button>
-          </div>
+          <p class="fineprint">SignalWard never opens the link. It analyses the text and, when enabled, checks domain registration age.</p>
         </form>
 
         <section class="card" data-panel="activity" aria-labelledby="events-title" hidden>
@@ -89,7 +79,7 @@
         <section class="card empty" id="empty">
           <div class="empty__art" aria-hidden="true"><span></span><span></span><span></span></div>
           <b>Results appear here</b>
-          <p>Pick a scan on the left, or try one of the samples.</p>
+          <p>Choose a scanner on the left and run it. Verdicts arrive with a signed receipt.</p>
         </section>
         <section class="card" data-panel="activity" aria-labelledby="history-title" hidden>
           <div class="card-head"><h2 id="history-title">Recent reports</h2><a class="pill pill--line pill--sm" href="/account">All in profile</a></div>
