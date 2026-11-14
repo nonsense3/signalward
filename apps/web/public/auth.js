@@ -13,22 +13,42 @@ const TEXT = {
   signup: ["Create your account", "Start defending"],
   forgot: ["Account recovery", "Reset your password"],
   reset: ["Account recovery", "Choose a new password"],
+  magic: ["Passwordless", "Get a sign-in link"],
   callback: ["One moment", "Signing you in…"],
 };
+let authMethods = null;
+let currentMode = "signin";
+function refreshSso() {
+  const available = authMethods && ((authMethods.oauth && authMethods.oauth.length) || authMethods.magicLink);
+  $("#sso").hidden = !(["signin", "signup"].includes(currentMode) && available);
+}
+function applyMethods() {
+  const oauth = authMethods?.oauth ?? [];
+  for (const el of $$("[data-sso]")) el.hidden = !oauth.includes(el.dataset.sso);
+  for (const el of $$('[data-go="magic"]')) el.hidden = !authMethods?.magicLink;
+  if (authMethods && !authMethods.signup) for (const el of $$('[data-go="signup"]')) el.closest("p")?.setAttribute("hidden", "");
+  if (authMethods && !authMethods.recovery) for (const el of $$('[data-go="forgot"]')) el.hidden = true;
+}
 const notice = $("#auth-notice");
 function showNotice(kind, text) {
   notice.hidden = false;
   notice.replaceChildren(h("div", { class: `notice notice--${kind}`, role: kind === "error" ? "alert" : "status", text }));
 }
 function setMode(mode, { keepNotice = false } = {}) {
+  currentMode = mode;
   for (const form of $$("form[data-mode]")) form.hidden = form.dataset.mode !== mode;
   const [eyebrow, title] = TEXT[mode];
   $("#auth-eyebrow").textContent = eyebrow;
   $("#auth-title").textContent = title;
   document.title = `${title} — SignalWard`;
   if (!keepNotice) notice.hidden = true;
+  refreshSso();
   $(`form[data-mode="${mode}"] input`)?.focus({ preventScroll: true });
 }
+// Preserve the destination across the OAuth / magic-link round-trip.
+for (const link of $$("[data-sso]")) link.addEventListener("click", () => {
+  try { sessionStorage.setItem("sw-next", next); } catch {}
+});
 for (const button of $$("[data-go]")) button.addEventListener("click", () => {
   setMode(button.dataset.go);
   history.replaceState(null, "", `/auth?mode=${button.dataset.go}${next !== "/scan" ? `&next=${encodeURIComponent(next)}` : ""}`);
@@ -140,6 +160,18 @@ $("#form-reset").addEventListener("submit", (event) => {
   });
 });
 
+$("#form-magic").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!checkEmail(form)) return;
+  submit(form, async () => {
+    await api("/api/auth/magic-link", { method: "POST", body: { email: form.elements.email.value }, auth: "silent" });
+    try { sessionStorage.setItem("sw-next", next); } catch {}
+    setMode("signin", { keepNotice: true });
+    showNotice("success", `Check ${form.elements.email.value} for a one-time sign-in link.`);
+  });
+});
+
 /* ---------- Email-link callback (Supabase puts tokens in the URL fragment) ---------- */
 async function handleCallback() {
   setMode("callback");
@@ -165,19 +197,25 @@ async function handleCallback() {
     reportError(error);
     return;
   }
+  let dest = "/account";
+  try {
+    dest = sessionStorage.getItem("sw-next") || dest;
+    sessionStorage.removeItem("sw-next");
+  } catch {}
   if (fragment.get("type") === "recovery") setMode("reset");
-  else navigate("/account");
+  else navigate(dest);
 }
 
 /* ---------- Boot ---------- */
 async function boot() {
   if (location.pathname === "/auth/callback") return handleCallback();
-  const mode = ["signup", "forgot"].includes(params.get("mode")) ? params.get("mode") : "signin";
+  const mode = ["signup", "forgot", "magic"].includes(params.get("mode")) ? params.get("mode") : "signin";
   setMode(mode);
   const [me, health] = await Promise.all([getMe().catch(() => null), api("/api/health", { auth: "silent" }).catch(() => null)]);
   if (me) return navigate(next);
-  if (health && !health.signup) for (const el of $$('[data-go="signup"]')) el.closest("p").hidden = true;
-  if (health && !health.recovery) for (const el of $$('[data-go="forgot"]')) el.hidden = true;
+  authMethods = health;
+  applyMethods();
+  refreshSso();
   if (params.has("next")) showNotice("info", "Sign in to continue.");
 }
 boot();

@@ -1,6 +1,10 @@
 import { $, $$, api, h, init, navigate, reducedMotion, reportError, setFieldError, currentTheme, VERDICT } from "./ui.js";
+import { mountFooterLogo } from "./footer-logo.js";
 
 init();
+
+const footerWord = $("[data-logo]");
+if (footerWord) mountFooterLogo(footerWord);
 
 const stage = $(".stage");
 const canvas = $("canvas", stage);
@@ -131,9 +135,9 @@ function tick(now) {
   const velocity = Math.abs(scrollY - lastScroll) / Math.max(dt, 0.001);
   lastScroll = scrollY;
   const wave = Math.sin(Math.PI * s.mix);
-  const speed = Math.min(1, velocity / 2600);
-  s.energy = smooth(s.energy, wave * 0.9 + speed * 0.6, 6, dt);
-  s.aberration = smooth(s.aberration, wave * 0.6 + speed * 1.2, 6, dt);
+  const speed = Math.min(1, velocity / 3000);
+  s.energy = smooth(s.energy, wave * 0.5 + speed * 0.3, 5, dt);
+  s.aberration = smooth(s.aberration, wave * 0.4 + speed * 0.7, 5, dt);
 }
 requestAnimationFrame(tick);
 

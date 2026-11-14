@@ -35,6 +35,13 @@
         </div>
         <div id="auth-notice" hidden></div>
 
+        <div class="sso" id="sso" hidden>
+          <a class="pill pill--line sso-btn" href="/api/auth/oauth/github" data-sso="github"><span class="sso-ic sso-ic--github" aria-hidden="true"></span>Continue with GitHub</a>
+          <a class="pill pill--line sso-btn" href="/api/auth/oauth/google" data-sso="google"><span class="sso-ic sso-ic--google" aria-hidden="true"></span>Continue with Google</a>
+          <button class="pill pill--line sso-btn" type="button" data-go="magic"><span class="sso-ic sso-ic--mail" aria-hidden="true"></span>Email me a sign-in link</button>
+          <div class="divider"><span>or with a password</span></div>
+        </div>
+
         <form id="form-signin" data-mode="signin" novalidate>
           <label class="field"><span>Email</span><input name="email" type="email" autocomplete="email" required maxlength="254"></label>
           <label class="field"><span>Password <button class="text-btn" type="button" data-go="forgot">Forgot?</button></span>
@@ -58,6 +65,13 @@
           <p>Enter your email and we'll send a reset link if an account exists.</p>
           <label class="field"><span>Email</span><input name="email" type="email" autocomplete="email" required maxlength="254"></label>
           <button class="pill pill--dark pill--lg" type="submit">Send reset link<span class="arrow" aria-hidden="true"></span></button>
+          <p class="switch"><button type="button" data-go="signin">Back to sign in</button></p>
+        </form>
+
+        <form id="form-magic" data-mode="magic" novalidate hidden>
+          <p>We'll email you a one-time sign-in link. No password needed.</p>
+          <label class="field"><span>Email</span><input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+          <button class="pill pill--dark pill--lg" type="submit">Send sign-in link<span class="arrow" aria-hidden="true"></span></button>
           <p class="switch"><button type="button" data-go="signin">Back to sign in</button></p>
         </form>
 

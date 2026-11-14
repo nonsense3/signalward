@@ -13,6 +13,12 @@ export type AuthResult = { user: User; tokens: Tokens | null; sessionVersion?: n
 export interface AuthProvider {
   readonly kind: "supabase" | "local";
   readonly supportsRecovery: boolean;
+  readonly supportsMagicLink: boolean;
+  readonly oauthProviders: readonly string[];
+  /** Build the provider's hosted authorize URL, or null when OAuth is unavailable. */
+  oauthUrl(provider: string, redirectTo: string): string | null;
+  /** Send a passwordless sign-in link. */
+  magicLink(email: string, redirectTo: string): Promise<void>;
   signUp(email: string, password: string, displayName: string, redirectTo: string): Promise<AuthResult & { needsConfirmation: boolean }>;
   signIn(email: string, password: string): Promise<AuthResult>;
   refresh(refreshToken: string): Promise<AuthResult>;
@@ -78,6 +84,8 @@ function supabaseError(status: number, body: Record<string, unknown>): AppError 
 export class SupabaseAuth implements AuthProvider {
   readonly kind = "supabase" as const;
   readonly supportsRecovery = true;
+  readonly supportsMagicLink = true;
+  readonly oauthProviders = ["github", "google"] as const;
   #userCache = new Map<string, { user: User; until: number }>();
   private url: string;
   private anonKey: string;
@@ -159,6 +167,19 @@ export class SupabaseAuth implements AuthProvider {
     await this.#call("recover", { body: { email }, query: { redirect_to: redirectTo } });
   }
 
+  oauthUrl(provider: string, redirectTo: string): string | null {
+    if (!this.oauthProviders.includes(provider as (typeof this.oauthProviders)[number])) return null;
+    const url = new URL("/auth/v1/authorize", this.url);
+    url.searchParams.set("provider", provider);
+    url.searchParams.set("redirect_to", redirectTo);
+    return url.toString();
+  }
+
+  async magicLink(email: string, redirectTo: string) {
+    // create_user so a first-time visitor is onboarded by the same link.
+    await this.#call("otp", { body: { email, create_user: true }, query: { redirect_to: redirectTo } });
+  }
+
   async updatePassword(session: SessionData, currentPassword: string, newPassword: string) {
     // Re-authenticate first so a stolen session cookie alone cannot change the password.
     if (currentPassword) await this.signIn(session.email, currentPassword);
@@ -179,6 +200,8 @@ const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 export class LocalAuth implements AuthProvider {
   readonly kind = "local" as const;
   readonly supportsRecovery = false;
+  readonly supportsMagicLink = false;
+  readonly oauthProviders: readonly string[] = [];
   #file: string;
   #users: LocalRecord[];
   #dummySalt = randomBytes(16);
@@ -256,6 +279,14 @@ export class LocalAuth implements AuthProvider {
 
   async recover(): Promise<void> {
     throw new AppError(501, "AUTH_RECOVERY_UNAVAILABLE", "Password reset by email needs Supabase. Ask an administrator to reset local accounts.");
+  }
+
+  oauthUrl(): string | null {
+    return null;
+  }
+
+  async magicLink(): Promise<void> {
+    throw new AppError(501, "AUTH_MAGIC_UNAVAILABLE", "Magic-link sign-in needs Supabase. Use email and password for local accounts.");
   }
 
   async updatePassword(session: SessionData, currentPassword: string, newPassword: string) {
