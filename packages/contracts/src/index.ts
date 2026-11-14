@@ -78,11 +78,14 @@ export type Mitigation = {
 export type ThreatScenario = {
   id: string;
   actor: string;
+  boundary: string;
   targetAsset: string;
   attackPath: string;
   preconditions: string;
   controls: string[];
+  mitigations: string[];
   residualRisk: string;
+  status: "observed" | "no_signal" | "not_assessed";
   signal: "none" | "low" | "medium" | "high";
   impact: "low" | "medium" | "high" | "critical";
   confidence: Confidence;
@@ -90,7 +93,7 @@ export type ThreatScenario = {
 };
 
 export type ThreatAssessment = {
-  method: "deterministic-scenarios-v1";
+  method: "deterministic-scenarios-v2";
   scope: string;
   coverageLimitations: string[];
   scenarios: ThreatScenario[];

@@ -77,15 +77,18 @@ function indicatorChip(indicator, reportId) {
 function threatScenarioRow(scenario, findings) {
   const byId = new Map(findings.map((finding) => [finding.id, finding]));
   const evidence = scenario.findingIds.map((id) => byId.get(id)?.title).filter(Boolean);
-  const signalTone = scenario.signal === "high" ? "critical" : scenario.signal === "medium" ? "high" : scenario.signal === "low" ? "medium" : "info";
+  const statusTone = scenario.status === "observed" ? "critical" : scenario.status === "not_assessed" ? "warning" : "info";
   return h("details", { class: "finding" },
-    h("summary", {}, h("span", { class: `tag tag--${signalTone}`, text: `${scenario.signal} signal` }),
+    h("summary", {}, h("span", { class: `tag tag--${statusTone}`, text: scenario.status.replace(/_/g, " ") }),
       h("span", { class: "title", text: scenario.attackPath }), h("span", { class: "loc", text: `${scenario.impact} impact` })),
     h("div", { class: "finding__body" },
       h("p", {}, h("strong", { text: "Threat actor: " }), scenario.actor),
+      h("p", {}, h("strong", { text: "Trust boundary: " }), scenario.boundary),
       h("p", {}, h("strong", { text: "Target asset: " }), scenario.targetAsset),
       h("p", {}, h("strong", { text: "Preconditions: " }), scenario.preconditions),
-      h("p", {}, h("strong", { text: "Controls in this scan: " }), scenario.controls.join("; ")),
+      h("p", {}, h("strong", { text: "Detection signal: " }), `${scenario.signal} (${scenario.confidence} confidence; not a probability)`),
+      h("p", {}, h("strong", { text: "Existing controls: " }), scenario.controls.join("; ")),
+      h("p", {}, h("strong", { text: "Recommended mitigations: " }), scenario.mitigations.join(" ")),
       h("p", {}, h("strong", { text: "Residual risk: " }), scenario.residualRisk),
       evidence.length ? h("p", {}, h("strong", { text: "Linked findings: " }), evidence.join("; ")) : null));
 }
