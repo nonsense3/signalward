@@ -177,6 +177,8 @@ Run `node apps/cli/signalward.ts doctor` to check everything at once.
 
 ## Security Properties
 
+See [THREAT_MODEL.md](THREAT_MODEL.md) for assets, trust boundaries, attacker assumptions, abuse cases, implemented controls, and residual risks.
+
 - **Deterministic verdicts** — policy is pure code, no model or probability involved
 - **Zero-fetch URL analysis** — untrusted links are never opened
 - **Privacy-preserving indicators** — raw values are redacted; only keyed HMAC tags are stored
