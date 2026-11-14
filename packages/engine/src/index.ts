@@ -206,9 +206,13 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options:
     { detector: "link_lexical", status: "ran", detail: "Brand, homograph, redirect, shortener and hosting rules.", required: true },
     { detector: "workspace_correlation", status: "ran", detail: "Tags matched against this workspace's history and blocklist.", required: true },
     { detector: "domain_age", status: domainAgeRan ? "ran" : "skipped", detail: domainAgeRan ? "Registration age checked via RDAP; the link itself is never opened." : "Passive domain-age intelligence is off on this server.", required: false },
-    { detector: "page_inspection", status: "skipped", detail: "TLS and page content are never inspected. SignalWard does not open the link.", required: false },
+    { detector: "threat_intelligence", status: "skipped", detail: "No live URL-reputation provider is configured, so this destination cannot be confirmed safe against current threat feeds.", required: true },
+    { detector: "page_inspection", status: "skipped", detail: "TLS, redirects and page content are not inspected. SignalWard does not open submitted links.", required: false },
   ];
-  const verdict = evaluateFraudScan(findings, "complete");
+  // A clean lexical result is not a clean bill of health. With no live reputation
+  // provider configured, unresolved URLs must stay unverified instead of low risk.
+  const complete = coverage.every((item) => !item.required || item.status === "ran");
+  const verdict = evaluateFraudScan(findings, complete ? "complete" : "incomplete");
   timer.mark("policy");
   const threatAssessment = buildThreatAssessment({ kind: "url", verdict, findings, coverage });
   return {
@@ -221,13 +225,15 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options:
     policyVersion: POLICY_VERSION,
     verdict,
     coverage,
-    complete: true,
+    complete,
     findings: sortFindings(findings),
     threatAssessment,
     indicators: protectedIndicators.indicators,
     mitigations: mitigations("url", verdict),
     stages: timer.stages,
-    summary: FRAUD_SUMMARY[verdict] ?? verdict,
+    summary: verdict === "inconclusive"
+      ? "Inconclusive: local link checks ran, but no live reputation source confirmed this destination. Treat it as unverified."
+      : FRAUD_SUMMARY[verdict] ?? verdict,
   };
 }
 
