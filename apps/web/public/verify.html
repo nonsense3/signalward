@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#e9eaef">
+  <title>Verifier — SignalWard</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/verify-page.js"></script>
+</head>
+<body class="app">
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="header" data-header>
+    <a class="brand" href="/" aria-label="SignalWard home"><span class="brand__mark" aria-hidden="true"></span>SignalWard</a>
+    <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch between light and dark theme"></button>
+    <a class="pill pill--dark hide-sm" href="/scan">Console<span class="arrow" aria-hidden="true"></span></a>
+    <button class="pill menu-btn" type="button" data-menu aria-expanded="false" aria-controls="menu">Menu <span class="dots" aria-hidden="true"><i></i><i></i></span></button>
+  </header>
+  <main id="main">
+    <div class="page-head">
+      <div>
+        <span class="eyebrow">Independent verification</span>
+        <h1>Check a receipt yourself.</h1>
+      </div>
+      <p class="muted">Runs in this browser with WebCrypto. Nothing is uploaded.</p>
+    </div>
+    <div class="grid-12">
+      <form class="card span-7 stack" id="verify-form" novalidate>
+        <div class="card-head"><h2>Inputs</h2><label class="pill pill--line pill--sm">Load files<input class="sr-only" id="files" type="file" accept="application/json,.json" multiple></label></div>
+        <label class="field"><span>Receipt JSON</span><textarea name="receipt" rows="9" spellcheck="false" placeholder='{"schema":"signalward.receipt/v1", …}'></textarea></label>
+        <label class="field"><span>Report JSON <em>optional, checks the digest</em></span><textarea name="report" rows="7" spellcheck="false"></textarea></label>
+        <div class="row">
+          <button class="pill pill--dark pill--lg" type="submit">Verify<span class="arrow" aria-hidden="true"></span></button>
+          <button class="pill pill--line" type="button" id="tamper">Tamper with verdict</button>
+        </div>
+      </form>
+      <section class="span-5 stack" aria-live="polite">
+        <div class="card empty" id="verify-empty">
+          <div class="empty__art" aria-hidden="true"><span></span><span></span><span></span></div>
+          <b>Waiting for a receipt</b>
+          <p>Paste a receipt, load the downloaded files, or open one from the console.</p>
+        </div>
+        <div class="verify-result" id="verify-result" hidden></div>
+        <div class="card card--flat">
+          <div class="card-head"><h3>Trusted keys</h3><a class="pill pill--line pill--sm" href="/.well-known/signalward-keys.json" data-no-transition target="_blank" rel="noopener">JSON</a></div>
+          <div class="list" id="keys"><div class="skeleton"></div></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

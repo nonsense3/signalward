@@ -1,227 +1,145 @@
-import { fetchTrustedKeys, verifyReceipt } from "./verify.js";
+import { $, $$, ApiError, VERDICT, api, clearErrors, fmtTime, h, init, reportError, setFieldError, toast } from "./ui.js";
 
-/* ---------- Small DOM helper. Every value is set as text, never parsed as HTML. ---------- */
-function h(tag, props = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [key, value] of Object.entries(props)) {
-    if (value === undefined || value === null || value === false) continue;
-    if (key === "class") el.className = value;
-    else if (key === "text") el.textContent = value;
-    else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
-    else el.setAttribute(key, value === true ? "" : String(value));
-  }
-  for (const child of children.flat()) if (child !== null && child !== undefined && child !== false) el.append(child instanceof Node ? child : document.createTextNode(String(child)));
-  return el;
-}
-const $ = (selector) => document.querySelector(selector);
+init();
 
-/* ---------- API ---------- */
-class ApiError extends Error {
-  constructor(status, code, message) { super(message); this.status = status; this.code = code; }
-}
-async function api(path, { method = "GET", body } = {}, retried = false) {
-  const response = await fetch(path, {
-    method,
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    credentials: "same-origin",
-  });
-  const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && !retried) {
-    await openSession();
-    return api(path, { method, body }, true);
-  }
-  if (!response.ok) throw new ApiError(response.status, data.error?.code ?? "ERROR", data.error?.message ?? `Request failed (${response.status}).`);
-  return data;
-}
-
-/* ---------- Session and live events ---------- */
-let session = null;
-let events = null;
-async function openSession() {
-  const label = $("#session-label");
-  try {
-    session = await api("/api/session", { method: "POST", body: {} }, true);
-    $("#session").classList.add("is-live");
-    const expires = new Date(session.expiresAt);
-    label.textContent = `${session.workspace} · expires ${expires.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-    renderSession();
-    connectEvents();
-  } catch (error) {
-    $("#session").classList.remove("is-live");
-    label.textContent = `No session: ${error.message}`;
-  }
-}
-function renderSession() {
-  if (!session) return;
-  const rows = [
-    ["Workspace", session.workspace], ["Session", session.session], ["Issued", new Date(session.issuedAt).toLocaleString()],
-    ["Expires", new Date(session.expiresAt).toLocaleString()], ["Token", "HMAC-SHA-256 · HttpOnly · SameSite=Strict"],
-    ["Indicator key", `${session.indicatorKeyVersion} · HKDF per workspace`], ["Signing key", session.signingKeyId],
-  ];
-  $("#session-details").replaceChildren(...rows.flatMap(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })]));
-}
-function logEvent(text) {
-  const list = $("#events");
-  if (list.firstElementChild?.classList.contains("muted")) list.replaceChildren();
-  list.prepend(h("li", {}, h("time", { text: new Date().toLocaleTimeString() }), text));
-  while (list.children.length > 60) list.lastElementChild.remove();
-}
-function connectEvents() {
-  events?.close();
-  events = new EventSource("/api/events");
-  events.addEventListener("ready", () => logEvent("Connected to the workspace event stream."));
-  events.addEventListener("activity", (message) => {
-    const event = JSON.parse(message.data);
-    if (event.type === "scan.started") logEvent(`${event.kind} scan started`);
-    else if (event.type === "scan.completed") { logEvent(`${event.kind} scan ${event.reportId}: ${event.verdict.replace("_", " ")}, ${event.findings} findings`); refreshHistory(); }
-    else if (event.type === "blocklist.added") { logEvent(`Blocked a ${event.indicatorType.replace("_", " ")} indicator`); refreshBlocklist(); }
-    else if (event.type === "blocklist.removed") { logEvent("Removed an indicator from the blocklist"); refreshBlocklist(); }
-  });
-}
-$("#end-session").addEventListener("click", async () => {
-  if (!confirm("End the session? This erases this workspace's reports, indicator history and blocklist.")) return;
-  events?.close();
-  await api("/api/session/end", { method: "POST", body: {} }, true).catch(() => {});
-  latest = null;
-  $("#report").hidden = true;
-  $("#history").replaceChildren(h("tr", {}, h("td", { colspan: 5, class: "muted", text: "No reports yet." })));
-  $("#blocklist").replaceChildren(h("tr", {}, h("td", { colspan: 5, class: "muted", text: "Nothing blocked." })));
-  $("#events").replaceChildren(h("li", { class: "muted", text: "Session ended. Workspace data erased." }));
-  await openSession();
-});
+const output = $("#output");
+const empty = $("#empty");
+const results = new Map(); // kind -> stored report shown for that tab
+let tab = "repository";
 
 /* ---------- Tabs ---------- */
-const TABS = ["repository", "message", "url", "verify", "activity"];
+const TABS = ["repository", "message", "url", "activity"];
+function moveInk() {
+  const active = $(`[data-tab="${tab}"]`);
+  const ink = $(".segmented__ink");
+  if (!active || !ink) return;
+  ink.style.left = `${active.offsetLeft}px`;
+  ink.style.width = `${active.offsetWidth}px`;
+}
 function showTab(name) {
-  const tab = TABS.includes(name) ? name : "repository";
-  for (const panel of document.querySelectorAll("[data-panel]")) panel.hidden = panel.dataset.panel !== tab;
-  for (const link of document.querySelectorAll("[data-tab]")) {
-    if (link.dataset.tab === tab) link.setAttribute("aria-current", "page");
-    else link.removeAttribute("aria-current");
-  }
-  $("#report").hidden = !latest || latest.report.kind !== tab;
+  tab = TABS.includes(name) ? name : "repository";
+  for (const panel of $$("[data-panel]")) panel.hidden = panel.dataset.panel !== tab;
+  for (const link of $$("[data-tab]")) link.toggleAttribute("aria-current", link.dataset.tab === tab);
+  for (const link of $$("[data-tab]")) if (link.dataset.tab === tab) link.setAttribute("aria-current", "page");
+  moveInk();
+  $("#result")?.remove();
+  empty.hidden = tab === "activity" || results.has(tab);
+  if (results.has(tab)) render(results.get(tab), { scroll: false });
   if (tab === "activity") { refreshHistory(); refreshBlocklist(); }
 }
 addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+addEventListener("resize", moveInk);
+document.fonts?.ready.then(moveInk);
 
-/* ---------- Report rendering ---------- */
-let latest = null;
-const VERDICT_LABEL = { pass: "Pass", block: "Block", incomplete: "Incomplete", low_risk: "Low risk", suspicious: "Suspicious", high_risk: "High risk", inconclusive: "Inconclusive" };
+/* ---------- Rendering ---------- */
+const KIND_LABEL = { repository: "Repository scan", message: "Message review", url: "Link check" };
+const ORDER = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
 function download(name, data) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
-  const link = h("a", { href: url, download: name });
+  const link = h("a", { href: url, download: name, "data-no-transition": "" });
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function renderStages(stages) {
-  const list = h("ol", { class: "stages", "aria-label": "Scan stages" },
-    [...stages, { name: "sign", ms: null, status: "done" }].map((stage) => h("li", { class: stage.status === "skipped" ? "is-skipped" : "" }, h("b", { text: stage.name }), stage.ms === null ? "Ed25519" : `${stage.ms} ms`)));
-  [...list.children].forEach((item, index) => setTimeout(() => item.classList.add("is-done"), 120 + index * 140));
-  return list;
-}
-
-function renderFinding(finding) {
+function findingRow(finding) {
   const location = finding.location ? `${finding.location.path}:${finding.location.line}` : finding.category;
-  return h("details", {},
-    h("summary", {}, h("span", { class: `sev sev--${finding.severity}`, text: finding.severity }), h("span", { class: "title", text: finding.title }), h("span", { class: "loc", text: location })),
-    h("div", { class: "body" },
+  const title = finding.title.replace(/^Link \d+ \([^)]*\): /, "");
+  return h("details", { class: "finding" },
+    h("summary", {}, h("span", { class: `tag tag--${finding.severity}`, text: finding.severity }), h("span", { class: "title", text: title }), h("span", { class: "loc", text: location })),
+    h("div", { class: "finding__body" },
       h("p", { text: finding.description }),
-      h("p", {}, h("strong", { text: "Why it matters. " }), finding.impact),
-      h("p", {}, h("strong", { text: "Fix. " }), finding.remediation),
-      h("ul", { class: "evidence" }, finding.evidence.map((item) => h("li", {}, h("span", { text: item.label }), item.value))),
-      h("p", { class: "muted" }, h("code", { text: `${finding.id} · ${finding.ruleId} · confidence ${finding.confidence}` })),
-    ),
-  );
+      h("p", {}, h("strong", { text: "Fix: " }), finding.remediation),
+      h("ul", { class: "evidence" }, finding.evidence.slice(0, 3).map((item) => h("li", {}, h("span", { text: item.label }), item.value))),
+      h("p", { class: "mono muted", css: { "font-size": ".68rem" }, text: `${finding.id} · ${finding.ruleId}` })));
 }
 
-function renderIndicators(report) {
-  if (!report.indicators.length) return null;
-  const rows = report.indicators.map((indicator) => {
-    const button = h("button", { class: "chip", type: "button", text: indicator.blocked ? "Blocked" : "Block" });
-    button.disabled = indicator.blocked;
-    button.addEventListener("click", async () => {
-      button.disabled = true;
-      try {
-        await api("/api/blocklist", { method: "POST", body: { tag: indicator.tag, reportId: report.id } });
-        button.textContent = "Blocked";
-      } catch (error) {
-        button.disabled = false;
-        button.textContent = "Retry";
-        logEvent(error.message);
-      }
-    });
-    return h("tr", {},
-      h("td", { text: indicator.type.replace("_", " ") }), h("td", {}, h("code", { text: indicator.display })),
-      h("td", {}, h("code", { text: `${indicator.tag.slice(0, 14)}…` })), h("td", { text: indicator.seenBefore ? `${indicator.seenBefore} earlier` : "first" }), h("td", {}, button));
+function indicatorChip(indicator, reportId) {
+  const button = h("button", { type: "button", text: indicator.blocked ? "Blocked" : "Block", "aria-label": `Block ${indicator.type} ${indicator.display}` });
+  button.disabled = indicator.blocked;
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await api("/api/blocklist", { method: "POST", body: { tag: indicator.tag, reportId } });
+      button.textContent = "Blocked";
+      toast("success", "Indicator blocked", "Future reports that reuse it will be flagged.");
+    } catch (error) {
+      button.disabled = false;
+      reportError(error);
+    }
   });
-  return h("div", { class: "box" },
-    h("h2", { text: "Indicators (keyed tags, raw values discarded)" }),
-    h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, ["Type", "Redacted", "HMAC tag", "Seen", ""].map((t) => h("th", { scope: "col", text: t })))), h("tbody", {}, rows))));
+  return h("span", { class: "indicator" }, h("small", { text: indicator.type.replace("_", " ") }), h("code", { text: indicator.display }),
+    indicator.seenBefore ? h("small", { text: `×${indicator.seenBefore + 1}` }) : null, button);
 }
 
-function render(stored) {
-  latest = stored;
-  const { report, receipt } = stored;
-  const container = $("#report");
-  const counts = report.findings.reduce((acc, f) => ((acc[f.severity] = (acc[f.severity] ?? 0) + 1), acc), {});
-  const actions = h("div", { class: "row" },
-    h("button", { class: "button", type: "button", text: "Download receipt", onclick: () => download(`${report.id}.receipt.json`, receipt) }),
-    h("button", { class: "button", type: "button", text: "Download report", onclick: () => download(`${report.id}.report.json`, report) }),
-    h("button", { class: "button button--primary", type: "button", text: "Verify this receipt", onclick: () => { fillVerify(stored); location.hash = "#verify"; runVerify(); } }));
+function render(stored, { scroll = true } = {}) {
+  const { report, receipt, brief } = stored;
+  results.set(report.kind, stored);
+  if (tab !== report.kind) return;
+  empty.hidden = true;
+  $("#result")?.remove();
+  const verdict = VERDICT[report.verdict] ?? { label: report.verdict, tone: "info" };
+  const counts = {};
+  for (const finding of report.findings) counts[finding.severity] = (counts[finding.severity] ?? 0) + 1;
+  const findings = [...report.findings].sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
+  const shown = findings.slice(0, 4);
+  const list = h("div", { class: "findings" }, shown.map(findingRow));
+  const moreButton = findings.length > shown.length
+    ? h("button", { class: "pill pill--line pill--sm more", type: "button", text: `Show all ${findings.length}`, onclick: (event) => { list.replaceChildren(...findings.map(findingRow)); event.currentTarget.remove(); } })
+    : null;
 
-  container.replaceChildren(
-    renderStages(report.stages),
-    h("div", { class: `verdict v-${report.verdict}` },
-      h("span", { class: "verdict__label", text: VERDICT_LABEL[report.verdict] ?? report.verdict }),
-      h("p", { class: "verdict__summary", text: report.summary }),
-      h("p", { class: "verdict__meta" },
-        h("span", { text: report.id }), h("span", { text: report.policyVersion }), h("span", { text: report.complete ? "coverage complete" : "coverage partial" }),
-        h("span", { text: Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(" · ") || "no findings" }))),
-    h("div", { class: "coverage", "aria-label": "Detector coverage" }, report.coverage.map((item) =>
-      h("div", {}, h("b", {}, item.detector, h("span", { class: `status status--${item.status}`, text: item.required ? item.status : `${item.status} · optional` })), h("span", { text: item.detail })))),
-    h("div", { class: "box" },
-      h("h2", { text: `Findings (${report.findings.length})` }),
-      report.findings.length ? h("div", { class: "findings" }, report.findings.map(renderFinding)) : h("p", { class: "note", text: "No findings in the checks that ran." })),
-    renderIndicators(report),
-    h("div", { class: "box" },
-      h("h2", { text: "Mitigation" }),
-      h("ul", { class: "mitigations" }, report.mitigations.map((m) => h("li", {}, h("span", { class: `mode mode--${m.mode}`, text: m.mode }), h("b", { text: m.action }), h("span", { text: m.detail }))))),
-    h("div", { class: "box receipt" },
-      h("h2", { text: "Signed receipt" }),
-      h("dl", {},
-        h("dt", { text: "Key" }), h("dd", { text: receipt.payload.keyId }),
-        h("dt", { text: "Report digest" }), h("dd", { text: receipt.payload.reportDigest }),
-        h("dt", { text: "Action" }), h("dd", { text: receipt.payload.action }),
-        h("dt", { text: "Issued" }), h("dd", { text: receipt.payload.issuedAt }),
-        h("dt", { text: "Signature" }), h("dd", { text: `${receipt.signature.slice(0, 44)}…` })),
-      actions),
-  );
-  container.hidden = false;
-  container.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
-}
+  const container = h("div", { class: "stack", id: "result" },
+    h("section", { class: `verdict verdict--${verdict.tone}`, "aria-label": "Verdict" },
+      h("div", { class: "verdict__top" },
+        h("div", {}, h("p", { class: "verdict__label", text: verdict.label }), h("p", { class: "verdict__kind", text: `${KIND_LABEL[report.kind]} · ${fmtTime(report.createdAt)}` })),
+        h("div", { class: "counts" }, Object.keys(ORDER).filter((s) => counts[s]).map((s) => h("span", { class: `tag tag--${s}`, text: `${counts[s]} ${s}` })),
+          report.findings.length ? null : h("span", { class: "tag tag--success", text: "no findings" }))),
+      h("p", { class: "verdict__headline", text: brief?.headline ?? report.summary }),
+      brief?.points?.length ? h("ul", { class: "points" }, brief.points.map((point) => h("li", { text: point.text }))) : null,
+      h("div", { class: "verdict__foot" },
+        h("span", { class: "next", text: brief?.nextStep ?? report.mitigations[0]?.detail ?? "No action needed." }),
+        h("div", { class: "stages", "aria-label": "Stages" }, [...report.stages.map((stage) => stage.name), "signed"].map((name, index) => h("span", { css: { "animation-delay": `${index * 90}ms` }, text: name }))))),
 
-function showError(error) {
-  const container = $("#report");
-  container.replaceChildren(h("p", { class: "error", role: "alert", text: error.message }));
-  container.hidden = false;
+    report.findings.length ? h("section", { class: "card", "aria-labelledby": "findings-title" },
+      h("div", { class: "card-head" }, h("h3", { id: "findings-title", text: "Findings" }), h("span", { class: "meta", text: `${report.findings.length} total` })),
+      list, moreButton) : null,
+
+    report.indicators.length ? h("section", { class: "card", "aria-labelledby": "ind-title" },
+      h("div", { class: "card-head" }, h("h3", { id: "ind-title", text: "Indicators" }), h("span", { class: "meta", text: "private tags" })),
+      h("div", { class: "indicators" }, report.indicators.filter((item) => item.type !== "amount").map((item) => indicatorChip(item, report.id)))) : null,
+
+    h("section", { class: "card", "aria-labelledby": "receipt-title" },
+      h("div", { class: "card-head" }, h("h3", { id: "receipt-title", text: "Signed receipt" }),
+        h("div", { class: "coverage" }, report.coverage.map((item) => h("span", { class: `chip ${item.status === "ran" ? "" : `is-${item.status}`}`, title: item.detail }, h("span", { class: "dot" }), item.detector.replace(/_/g, " "))))),
+      h("div", { class: "receipt-row" },
+        h("dl", {},
+          h("dt", { text: "Digest" }), h("dd", { text: receipt.payload.reportDigest }),
+          h("dt", { text: "Key" }), h("dd", { text: receipt.payload.keyId }),
+          h("dt", { text: "Action" }), h("dd", { text: receipt.payload.action.replace(/_/g, " ") })),
+        h("span", { class: "seal", "aria-hidden": "true" })),
+      h("div", { class: "row", css: { "margin-top": "1rem" } },
+        h("a", { class: "pill pill--dark pill--sm", href: `/verify#${encodeURIComponent(report.id)}`, onclick: () => sessionStorage.setItem("sw-verify", JSON.stringify(stored)) }, "Verify", h("span", { class: "arrow", "aria-hidden": "true" })),
+        h("button", { class: "pill pill--line pill--sm", type: "button", text: "Receipt", onclick: () => download(`${report.id}.receipt.json`, receipt) }),
+        h("button", { class: "pill pill--line pill--sm", type: "button", text: "Report", onclick: () => download(`${report.id}.report.json`, report) }))));
+
+  output.prepend(container);
+  if (scroll && container.getBoundingClientRect().top > innerHeight * 0.6) container.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function runScan(kind, body, frame) {
-  frame?.classList.add("is-scanning");
-  const buttons = frame ? [...frame.querySelectorAll("button")] : [];
-  buttons.forEach((b) => (b.disabled = true));
+  if (frame) clearErrors(frame);
+  frame?.classList.add("scanning");
+  const buttons = frame ? $$("button", frame) : [];
+  buttons.forEach((button) => (button.disabled = true));
   try {
-    render(await api(`/api/scans/${kind}`, { method: "POST", body }));
+    render(await api(`/api/scans/${kind}`, { method: "POST", body, timeout: 90_000 }));
   } catch (error) {
-    showError(error);
+    reportError(error, frame?.tagName === "FORM" ? frame : undefined);
   } finally {
-    frame?.classList.remove("is-scanning");
-    buttons.forEach((b) => (b.disabled = false));
+    frame?.classList.remove("scanning");
+    buttons.forEach((button) => (button.disabled = false));
     $("#scan-repo").disabled = !selection.length;
   }
 }
@@ -233,32 +151,28 @@ const MAX_FILES = 2000, MAX_FILE = 1_000_000, MAX_TOTAL = 12_000_000;
 let selection = [];
 let selectionLabel = "uploaded files";
 
-function keep(path, size) {
-  return !path.split("/").some((part) => SKIP_DIRS.has(part)) && !BINARY.test(path) && size <= MAX_FILE;
-}
-
-async function collect(entries) {
+async function setSelection(entries, label) {
+  $("#repo-meta").textContent = "Reading files…";
   const files = [];
   let total = 0, skipped = 0;
   for (const { path, file } of entries) {
-    if (!keep(path, file.size) || files.length >= MAX_FILES || total + file.size > MAX_TOTAL) { skipped++; continue; }
+    const keep = !path.split("/").some((part) => SKIP_DIRS.has(part)) && !BINARY.test(path) && file.size <= MAX_FILE;
+    if (!keep || files.length >= MAX_FILES || total + file.size > MAX_TOTAL) { skipped++; continue; }
     total += file.size;
-    files.push({ path, content: await file.text() });
+    try {
+      files.push({ path, content: await file.text() });
+    } catch {
+      skipped++;
+    }
   }
-  return { files, skipped, total };
-}
-
-async function setSelection(entries, label) {
-  $("#repo-meta").textContent = "Reading files…";
-  const { files, skipped, total } = await collect(entries);
   selection = files;
   selectionLabel = label;
   $("#repo-meta").textContent = files.length
-    ? `${label}: ${files.length} text files, ${(total / 1024).toFixed(0)} KB${skipped ? `, ${skipped} skipped in the browser` : ""}.`
-    : "No scannable text files in the selection.";
+    ? `${label} · ${files.length} files · ${(total / 1024).toFixed(0)} KB${skipped ? ` · ${skipped} skipped` : ""}`
+    : "No readable text files in that selection.";
   $("#scan-repo").disabled = !files.length;
+  if (!files.length && entries.length) toast("warning", "Nothing to scan", "Every file was skipped as binary, too large or build output.");
 }
-
 for (const input of [$("#pick-folder"), $("#pick-files")]) {
   input.addEventListener("change", () => {
     const list = [...input.files];
@@ -267,13 +181,10 @@ for (const input of [$("#pick-folder"), $("#pick-files")]) {
     input.value = "";
   });
 }
-
 async function walkEntry(entry, prefix, out) {
   if (out.length > MAX_FILES * 2) return;
-  if (entry.isFile) {
-    const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
-    out.push({ path: `${prefix}${entry.name}`, file });
-  } else if (entry.isDirectory && !SKIP_DIRS.has(entry.name)) {
+  if (entry.isFile) out.push({ path: `${prefix}${entry.name}`, file: await new Promise((resolve, reject) => entry.file(resolve, reject)) });
+  else if (entry.isDirectory && !SKIP_DIRS.has(entry.name)) {
     const reader = entry.createReader();
     let batch;
     do {
@@ -282,120 +193,119 @@ async function walkEntry(entry, prefix, out) {
     } while (batch.length);
   }
 }
-
 const drop = $("#drop");
 drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("is-over"); });
 drop.addEventListener("dragleave", () => drop.classList.remove("is-over"));
 drop.addEventListener("drop", async (event) => {
   event.preventDefault();
   drop.classList.remove("is-over");
-  const items = [...event.dataTransfer.items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
-  const out = [];
-  for (const entry of items) await walkEntry(entry, "", out);
-  // Strip the dropped folder name so paths are relative to the project root.
-  const single = items.length === 1 && items[0].isDirectory ? `${items[0].name}/` : "";
-  setSelection(out.map(({ path, file }) => ({ path: single && path.startsWith(single) ? path.slice(single.length) : path, file })), single ? items[0].name : "dropped files");
+  try {
+    const items = [...event.dataTransfer.items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean);
+    const out = [];
+    for (const entry of items) await walkEntry(entry, "", out);
+    const single = items.length === 1 && items[0].isDirectory ? `${items[0].name}/` : "";
+    await setSelection(out.map(({ path, file }) => ({ path: single && path.startsWith(single) ? path.slice(single.length) : path, file })), single ? items[0].name : "dropped files");
+  } catch {
+    toast("error", "Couldn't read the drop", "Your browser blocked access to those files. Use Choose folder instead.");
+  }
 });
+$("#scan-repo").addEventListener("click", () => runScan("repository", { files: selection, label: selectionLabel }, $('[data-panel="repository"]')));
+for (const button of $$("[data-repo-sample]")) button.addEventListener("click", () => runScan("repository", { sample: button.dataset.repoSample }, $('[data-panel="repository"]')));
 
-$("#scan-repo").addEventListener("click", () => runScan("repository", { files: selection, label: selectionLabel }, $("#repo-intake")));
-for (const button of document.querySelectorAll("[data-repo-sample]")) {
-  button.addEventListener("click", () => runScan("repository", { sample: button.dataset.repoSample }, $("#repo-intake")));
-}
-
-/* ---------- Message and URL intake ---------- */
+/* ---------- Message and link intake ---------- */
 $("#message-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  runScan("message", { text: form.get("text"), sender: form.get("sender"), subject: form.get("subject") }, event.currentTarget);
+  const form = event.currentTarget;
+  const text = form.elements.text.value.trim();
+  if (!text) return setFieldError(form.elements.text, "Paste the message you want to check.");
+  runScan("message", { text, sender: form.elements.sender.value.trim(), subject: form.elements.subject.value.trim() }, form);
 });
-for (const button of document.querySelectorAll("[data-message-sample]")) {
-  button.addEventListener("click", () => runScan("message", { sample: button.dataset.messageSample }, $("#message-form")));
-}
+for (const button of $$("[data-message-sample]")) button.addEventListener("click", () => runScan("message", { sample: button.dataset.messageSample }, $("#message-form")));
 $("#url-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  runScan("url", { url: new FormData(event.currentTarget).get("url") }, event.currentTarget);
+  const form = event.currentTarget;
+  const url = form.elements.url.value.trim();
+  if (!url) return setFieldError(form.elements.url, "Enter a link or domain.");
+  runScan("url", { url }, form);
 });
-for (const chip of document.querySelectorAll("[data-url-sample]")) {
-  chip.addEventListener("click", () => {
-    $("#url-form").elements.url.value = chip.dataset.urlSample;
-    runScan("url", { url: chip.dataset.urlSample }, $("#url-form"));
-  });
-}
-
-/* ---------- Verification ---------- */
-function fillVerify(stored) {
-  $("#verify-receipt").value = JSON.stringify(stored.receipt, null, 2);
-  $("#verify-report").value = JSON.stringify(stored.report, null, 2);
-}
-async function runVerify() {
-  const out = $("#verify-result");
-  let receipt, report;
-  try {
-    receipt = JSON.parse($("#verify-receipt").value);
-    const reportText = $("#verify-report").value.trim();
-    report = reportText ? JSON.parse(reportText) : undefined;
-  } catch {
-    out.replaceChildren(h("li", { class: "summary fail", text: "The receipt or report is not valid JSON." }));
-    return;
-  }
-  try {
-    const keys = await fetchTrustedKeys();
-    const result = await verifyReceipt(receipt, keys, report);
-    out.replaceChildren(
-      h("li", { class: `summary ${result.valid ? "ok" : "fail"}`, text: result.valid ? "Valid: the receipt is authentic and matches the report." : "Invalid: at least one check failed." }),
-      ...result.checks.map((check) => h("li", {}, h("span", { class: check.ok ? "ok" : "fail", text: check.ok ? "✓" : "✕", "aria-label": check.ok ? "passed" : "failed" }), h("b", { text: check.check }), h("span", { text: check.detail }))),
-    );
-  } catch (error) {
-    out.replaceChildren(h("li", { class: "summary fail", text: error.message }));
-  }
-}
-$("#verify-run").addEventListener("click", runVerify);
-$("#verify-latest").addEventListener("click", () => {
-  if (!latest) { $("#verify-result").replaceChildren(h("li", { class: "summary fail", text: "Run a scan first." })); return; }
-  fillVerify(latest);
-  runVerify();
-});
-$("#verify-tamper").addEventListener("click", () => {
-  try {
-    const receipt = JSON.parse($("#verify-receipt").value);
-    const flipped = { pass: "block", block: "pass", incomplete: "pass", low_risk: "high_risk", suspicious: "low_risk", high_risk: "low_risk", inconclusive: "low_risk" };
-    receipt.payload.verdict = flipped[receipt.payload.verdict] ?? "pass";
-    $("#verify-receipt").value = JSON.stringify(receipt, null, 2);
-    runVerify();
-  } catch {
-    $("#verify-result").replaceChildren(h("li", { class: "summary fail", text: "Load a receipt first." }));
-  }
+for (const chip of $$("[data-url-sample]")) chip.addEventListener("click", () => {
+  $("#url-form").elements.url.value = chip.dataset.urlSample;
+  runScan("url", { url: chip.dataset.urlSample }, $("#url-form"));
 });
 
 /* ---------- Activity ---------- */
+const KIND_SHORT = { repository: "GIT", message: "MSG", url: "URL" };
 async function refreshHistory() {
+  const host = $("#history");
+  host.replaceChildren(h("div", { class: "skeleton", css: { height: "3rem" } }));
   try {
     const { reports } = await api("/api/reports");
-    const body = $("#history");
-    if (!reports.length) { body.replaceChildren(h("tr", {}, h("td", { colspan: 5, class: "muted", text: "No reports yet." }))); return; }
-    body.replaceChildren(...reports.map((r) => h("tr", {},
-      h("td", {}, h("button", { class: "history-link", type: "button", text: r.id, onclick: async () => {
-        const stored = await api(`/api/reports/${encodeURIComponent(r.id)}`);
-        location.hash = `#${stored.report.kind}`;
-        render(stored);
-        showTab(stored.report.kind);
-      } })),
-      h("td", { text: r.kind }), h("td", {}, h("span", { class: `sev sev--${["block", "high_risk"].includes(r.verdict) ? "high" : ["suspicious", "incomplete", "inconclusive"].includes(r.verdict) ? "medium" : "info"}`, text: VERDICT_LABEL[r.verdict] ?? r.verdict })),
-      h("td", { text: String(r.findings) }), h("td", { text: new Date(r.createdAt).toLocaleTimeString() }))));
-  } catch { /* the session banner already reports failures */ }
+    if (!reports.length) return host.replaceChildren(h("p", { class: "muted", text: "No reports yet." }));
+    host.replaceChildren(...reports.slice(0, 12).map((item) => {
+      const verdict = VERDICT[item.verdict] ?? { label: item.verdict, tone: "info" };
+      return h("div", { class: "list__row" },
+        h("span", { class: "kind", text: KIND_SHORT[item.kind] }),
+        h("button", { class: "link", type: "button", onclick: () => openReport(item.id) }, h("b", { text: item.summary }), h("span", { text: `${fmtTime(item.createdAt)} · ${item.findings} findings` })),
+        h("span", { class: `tag tag--${verdict.tone}`, text: verdict.label }));
+    }));
+  } catch (error) {
+    host.replaceChildren(h("p", { class: "muted", text: "Reports could not be loaded." }));
+    reportError(error);
+  }
+}
+async function openReport(id) {
+  try {
+    const stored = await api(`/api/reports/${encodeURIComponent(id)}`);
+    results.set(stored.report.kind, stored);
+    location.hash = `#${stored.report.kind}`;
+  } catch (error) {
+    reportError(error);
+  }
 }
 async function refreshBlocklist() {
+  const host = $("#blocklist");
   try {
     const { entries } = await api("/api/blocklist");
-    const body = $("#blocklist");
-    if (!entries.length) { body.replaceChildren(h("tr", {}, h("td", { colspan: 5, class: "muted", text: "Nothing blocked." }))); return; }
-    body.replaceChildren(...entries.map((entry) => h("tr", {},
-      h("td", { text: entry.type.replace("_", " ") }), h("td", {}, h("code", { text: entry.display })), h("td", {}, h("code", { text: `${entry.tag.slice(0, 14)}…` })),
-      h("td", { text: new Date(entry.addedAt).toLocaleTimeString() }),
-      h("td", {}, h("button", { class: "chip", type: "button", text: "Unblock", onclick: () => api("/api/blocklist", { method: "POST", body: { tag: entry.tag, remove: true } }).then(refreshBlocklist) })))));
-  } catch { /* ignore */ }
+    if (!entries.length) return host.replaceChildren(h("p", { class: "muted", text: "Nothing blocked yet." }));
+    host.replaceChildren(...entries.map((entry) => h("div", { class: "list__row" },
+      h("span", { class: "kind", text: entry.type.slice(0, 3).toUpperCase() }),
+      h("div", {}, h("b", {}, h("code", { text: entry.display })), h("span", { text: `added ${fmtTime(entry.addedAt)}` })),
+      h("button", { class: "pill pill--line pill--sm", type: "button", text: "Unblock", onclick: async () => {
+        try { await api("/api/blocklist", { method: "DELETE", body: { tag: entry.tag } }); refreshBlocklist(); } catch (error) { reportError(error); }
+      } }))));
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+function logEvent(text) {
+  const list = $("#events");
+  if (list.firstElementChild?.classList.contains("muted")) list.replaceChildren();
+  list.prepend(h("li", {}, h("time", { text: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) }), text));
+  while (list.children.length > 50) list.lastElementChild.remove();
+}
+function connectEvents() {
+  const source = new EventSource("/api/events");
+  source.addEventListener("ready", () => { $("#live").classList.remove("is-off"); $("#events-state").textContent = "live"; });
+  source.addEventListener("activity", (message) => {
+    const event = JSON.parse(message.data);
+    if (event.type === "scan.started") logEvent(`${KIND_LABEL[event.kind] ?? event.kind} started`);
+    else if (event.type === "scan.completed") { logEvent(`${KIND_LABEL[event.kind]}: ${VERDICT[event.verdict]?.label ?? event.verdict}, ${event.findings} findings`); if (tab === "activity") refreshHistory(); }
+    else if (event.type === "blocklist.added") { logEvent(`Blocked a ${event.indicatorType.replace("_", " ")}`); if (tab === "activity") refreshBlocklist(); }
+    else if (event.type === "blocklist.removed") logEvent("Removed an indicator from the blocklist");
+    else if (event.type === "data.erased") logEvent("Account data erased");
+  });
+  source.addEventListener("error", () => { $("#live").classList.add("is-off"); $("#events-state").textContent = "reconnecting…"; });
 }
 
 /* ---------- Boot ---------- */
 showTab(location.hash.slice(1));
-openSession();
+connectEvents();
+const prefill = new URLSearchParams(location.search).get("url");
+if (prefill) {
+  history.replaceState(null, "", "/scan#url");
+  showTab("url");
+  $("#url-form").elements.url.value = prefill.slice(0, 2048);
+  runScan("url", { url: prefill.slice(0, 2048) }, $("#url-form"));
+}
+export { ApiError };

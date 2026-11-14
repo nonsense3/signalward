@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#e9eaef">
+  <meta name="robots" content="noindex">
+  <title>Sign in — SignalWard</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="/auth.js"></script>
+</head>
+<body class="app auth-page">
+  <a class="skip" href="#auth-title">Skip to form</a>
+  <header class="header" data-header>
+    <a class="brand" href="/" aria-label="SignalWard home"><span class="brand__mark" aria-hidden="true"></span>SignalWard</a>
+    <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch between light and dark theme"></button>
+    <button class="pill menu-btn" type="button" data-menu aria-expanded="false" aria-controls="menu">Menu <span class="dots" aria-hidden="true"><i></i><i></i></span></button>
+  </header>
+  <main>
+    <section class="auth-art" aria-hidden="true">
+      <canvas></canvas>
+      <div class="auth-art__copy">
+        <h1 class="display">Your evidence, your account.</h1>
+        <p>Reports, blocklists and indicator history stay private to you, enforced by row-level security.</p>
+      </div>
+    </section>
+    <section class="auth-panel">
+      <div class="auth-card" id="auth-card">
+        <div>
+          <span class="eyebrow" id="auth-eyebrow">Welcome back</span>
+          <h2 id="auth-title">Sign in</h2>
+        </div>
+        <div id="auth-notice" hidden></div>
+
+        <form id="form-signin" data-mode="signin" novalidate>
+          <label class="field"><span>Email</span><input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+          <label class="field"><span>Password <button class="text-btn" type="button" data-go="forgot">Forgot?</button></span>
+            <span class="pw"><input name="password" type="password" autocomplete="current-password" required maxlength="128"><button type="button" data-reveal-pw>Show</button></span></label>
+          <button class="pill pill--dark pill--lg" type="submit">Sign in<span class="arrow" aria-hidden="true"></span></button>
+          <p class="switch">New here? <button type="button" data-go="signup">Create an account</button></p>
+        </form>
+
+        <form id="form-signup" data-mode="signup" novalidate hidden>
+          <label class="field"><span>Name</span><input name="displayName" autocomplete="name" required maxlength="60"></label>
+          <label class="field"><span>Email</span><input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+          <label class="field"><span>Password</span>
+            <span class="pw"><input name="password" type="password" autocomplete="new-password" required maxlength="128" aria-describedby="pw-hint"><button type="button" data-reveal-pw>Show</button></span>
+            <span class="strength" data-score="0" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <p class="field__hint" id="pw-hint">At least 10 characters, with letters and a number or symbol.</p></label>
+          <button class="pill pill--dark pill--lg" type="submit">Create account<span class="arrow" aria-hidden="true"></span></button>
+          <p class="switch">Already registered? <button type="button" data-go="signin">Sign in</button></p>
+        </form>
+
+        <form id="form-forgot" data-mode="forgot" novalidate hidden>
+          <p>Enter your email and we'll send a reset link if an account exists.</p>
+          <label class="field"><span>Email</span><input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+          <button class="pill pill--dark pill--lg" type="submit">Send reset link<span class="arrow" aria-hidden="true"></span></button>
+          <p class="switch"><button type="button" data-go="signin">Back to sign in</button></p>
+        </form>
+
+        <form id="form-reset" data-mode="reset" novalidate hidden>
+          <label class="field"><span>New password</span>
+            <span class="pw"><input name="newPassword" type="password" autocomplete="new-password" required maxlength="128"><button type="button" data-reveal-pw>Show</button></span>
+            <span class="strength" data-score="0" aria-hidden="true"><i></i><i></i><i></i><i></i></span></label>
+          <button class="pill pill--dark pill--lg" type="submit">Save password<span class="arrow" aria-hidden="true"></span></button>
+        </form>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -3,134 +3,100 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0a0a0f">
-  <title>SignalWard — Scanner console</title>
+  <meta name="theme-color" content="#e9eaef">
+  <title>Console — SignalWard</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="preload" href="/fonts/MonaSansVF.woff2" as="font" type="font/woff2" crossorigin>
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/base.css">
   <link rel="stylesheet" href="/app.css">
   <script type="module" src="/console.js"></script>
 </head>
-<body>
+<body class="app">
   <a class="skip" href="#main">Skip to content</a>
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="SignalWard observatory"><span aria-hidden="true">◈</span> SignalWard <small>console</small></a>
-    <div class="session" id="session" aria-live="polite">
-      <span class="dot" aria-hidden="true"></span><span id="session-label">Opening a workspace session…</span>
-    </div>
-    <button class="ghost" id="end-session" type="button">End session</button>
+  <header class="header" data-header>
+    <a class="brand" href="/" aria-label="SignalWard home"><span class="brand__mark" aria-hidden="true"></span>SignalWard</a>
+    <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch between light and dark theme"></button>
+    <a class="pill pill--dark hide-sm" href="/account" data-magnetic>Profile<span class="arrow" aria-hidden="true"></span></a>
+    <button class="pill menu-btn" type="button" data-menu aria-expanded="false" aria-controls="menu">Menu <span class="dots" aria-hidden="true"><i></i><i></i></span></button>
   </header>
 
-  <div class="shell">
-    <nav class="rail" aria-label="Scanner sections">
-      <a href="#repository" data-tab="repository"><span class="rail__no">01</span>Repository</a>
-      <a href="#message" data-tab="message"><span class="rail__no">02</span>Message</a>
-      <a href="#url" data-tab="url"><span class="rail__no">03</span>Link</a>
-      <a href="#verify" data-tab="verify"><span class="rail__no">04</span>Verify</a>
-      <a href="#activity" data-tab="activity"><span class="rail__no">05</span>Activity</a>
-    </nav>
+  <main id="main">
+    <div class="page-head">
+      <div>
+        <span class="eyebrow">Console</span>
+        <h1>Scan anything suspicious.</h1>
+      </div>
+      <nav class="segmented" aria-label="Scan type" id="tabs">
+        <span class="segmented__ink" aria-hidden="true"></span>
+        <a href="#repository" data-tab="repository">Repository</a>
+        <a href="#message" data-tab="message">Message</a>
+        <a href="#url" data-tab="url">Link</a>
+        <a href="#activity" data-tab="activity">Activity <span class="live-dot is-off" id="live" aria-hidden="true"></span></a>
+      </nav>
+    </div>
 
-    <main id="main">
-      <section class="panel" id="panel-repository" data-panel="repository" aria-labelledby="repo-title">
-        <p class="eyebrow">Repository scan</p>
-        <h1 id="repo-title">Scan a snapshot for secrets, vulnerable dependencies and risky pipelines.</h1>
-        <div class="intake scanframe" id="repo-intake">
+    <div class="grid-12" id="workspace">
+      <div class="span-5 stack">
+        <section class="card intake" data-panel="repository" aria-labelledby="repo-title">
+          <div class="card-head"><h2 id="repo-title">Repository</h2><span class="meta">secrets · deps · CI</span></div>
           <div class="drop" id="drop">
-            <p class="drop__title">Drop a project folder here</p>
-            <p class="drop__hint">or choose one. <code>node_modules</code>, <code>.git</code>, build output and binaries are skipped in the browser.</p>
+            <span class="drop__orb" aria-hidden="true"></span>
+            <b>Drop a project folder</b>
+            <p class="muted">Build output, <code>node_modules</code> and binaries are skipped.</p>
             <div class="row">
-              <label class="button">Choose folder<input class="sr-only" id="pick-folder" type="file" webkitdirectory multiple></label>
-              <label class="button">Choose files<input class="sr-only" id="pick-files" type="file" multiple></label>
+              <label class="pill pill--dark pill--sm">Choose folder<input class="sr-only" id="pick-folder" type="file" webkitdirectory multiple></label>
+              <label class="pill pill--line pill--sm">Files<input class="sr-only" id="pick-files" type="file" multiple></label>
             </div>
           </div>
-          <p class="meta" id="repo-meta">No files selected.</p>
-          <div class="row">
-            <button class="button button--primary" id="scan-repo" type="button" disabled>Scan selection</button>
-            <button class="button" type="button" data-repo-sample="vulnerable">Load synthetic vulnerable repo</button>
-            <button class="button" type="button" data-repo-sample="remediated">Load remediated repo</button>
-          </div>
-          <p class="note">Files go only to this local server. They are scanned in memory and never written to disk. The workspace keeps only the redacted report. To scan a checkout from a terminal, run <code>node apps/cli/signalward.ts scan &lt;path&gt;</code>.</p>
-        </div>
-      </section>
+          <div class="selection"><span id="repo-meta">Nothing selected.</span><button class="pill pill--accent pill--sm" id="scan-repo" type="button" disabled>Scan</button></div>
+          <div class="samples">Try: <button class="chip" type="button" data-repo-sample="vulnerable">Vulnerable sample</button><button class="chip" type="button" data-repo-sample="remediated">Fixed sample</button></div>
+          <p class="fineprint">Scanned in memory on this server. Only the redacted report is saved.</p>
+        </section>
 
-      <section class="panel" id="panel-message" data-panel="message" aria-labelledby="msg-title" hidden>
-        <p class="eyebrow">Fraud review</p>
-        <h1 id="msg-title">Paste a suspicious message, email or chat.</h1>
-        <form class="intake scanframe" id="message-form">
-          <div class="grid2">
-            <label class="field"><span>Sender address <em>optional</em></span><input name="sender" autocomplete="off" maxlength="320" placeholder="alerts@example.com"></label>
-            <label class="field"><span>Subject <em>optional</em></span><input name="subject" autocomplete="off" maxlength="500"></label>
-          </div>
-          <label class="field"><span>Message text</span><textarea name="text" rows="8" maxlength="20000" required placeholder="Paste the full message. Links are analysed without being opened."></textarea></label>
-          <div class="row">
-            <button class="button button--primary" type="submit">Analyse message</button>
-            <button class="button" type="button" data-message-sample="scam">Synthetic scam</button>
-            <button class="button" type="button" data-message-sample="benign">Benign OTP notice</button>
-          </div>
-          <p class="note">Phone numbers, UPI IDs, IBANs, wallets and links are converted to keyed HMAC tags for correlation, and the raw values are discarded. The report shows redacted forms only.</p>
+        <form class="card intake" data-panel="message" aria-labelledby="msg-title" id="message-form" novalidate hidden>
+          <div class="card-head"><h2 id="msg-title">Message</h2><span class="meta">SMS · email · chat</span></div>
+          <label class="field"><span>Message</span><textarea name="text" rows="7" maxlength="20000" placeholder="Paste the full message. Links are never opened."></textarea></label>
+          <label class="field"><span>Sender <em>optional</em></span><input name="sender" autocomplete="off" maxlength="320" placeholder="alerts@example.com"></label>
+          <label class="field"><span>Subject <em>optional</em></span><input name="subject" autocomplete="off" maxlength="500"></label>
+          <button class="pill pill--dark pill--lg" type="submit">Analyse<span class="arrow" aria-hidden="true"></span></button>
+          <div class="samples">Try: <button class="chip" type="button" data-message-sample="scam">Synthetic scam</button><button class="chip" type="button" data-message-sample="benign">Real OTP notice</button></div>
+          <p class="fineprint">Phone numbers, UPI IDs, IBANs and wallets become private tags. Raw values are discarded.</p>
         </form>
-      </section>
 
-      <section class="panel" id="panel-url" data-panel="url" aria-labelledby="url-title" hidden>
-        <p class="eyebrow">Link check</p>
-        <h1 id="url-title">Check a link without opening it.</h1>
-        <form class="intake scanframe" id="url-form">
-          <label class="field"><span>Link or domain</span><input name="url" autocomplete="off" spellcheck="false" maxlength="2048" required placeholder="hxxps://example[.]com/login"></label>
-          <div class="row">
-            <button class="button button--primary" type="submit">Check link</button>
-          </div>
-          <p class="meta">Try:
+        <form class="card intake" data-panel="url" aria-labelledby="url-title" id="url-form" novalidate hidden>
+          <div class="card-head"><h2 id="url-title">Link</h2><span class="meta">never fetched</span></div>
+          <label class="field"><span>Link or domain</span><input name="url" autocomplete="off" spellcheck="false" maxlength="2048" placeholder="hxxps://example[.]com/login"></label>
+          <button class="pill pill--dark pill--lg" type="submit">Check link<span class="arrow" aria-hidden="true"></span></button>
+          <div class="samples">Try:
             <button class="chip" type="button" data-url-sample="https://paypa1-login.com/verify">paypa1-login.com</button>
             <button class="chip" type="button" data-url-sample="https://xn--pypal-4ve.com/">xn--pypal-4ve.com</button>
             <button class="chip" type="button" data-url-sample="https://accounts.google.com.secure-check.top/signin">google.com.secure-check.top</button>
             <button class="chip" type="button" data-url-sample="https://www.paypal.com/signin">paypal.com</button>
-          </p>
-          <p class="note">SignalWard never fetches the destination. DNS, TLS and page inspection are listed as skipped coverage in this local build.</p>
+          </div>
         </form>
-      </section>
 
-      <section class="panel" id="panel-verify" data-panel="verify" aria-labelledby="verify-title" hidden>
-        <p class="eyebrow">Independent verification</p>
-        <h1 id="verify-title">Verify a signed receipt in this browser.</h1>
-        <div class="intake">
-          <div class="grid2">
-            <label class="field"><span>Receipt JSON</span><textarea id="verify-receipt" rows="10" spellcheck="false" placeholder='{"schema":"signalward.receipt/v1", …}'></textarea></label>
-            <label class="field"><span>Report JSON <em>optional, checks the digest</em></span><textarea id="verify-report" rows="10" spellcheck="false"></textarea></label>
-          </div>
-          <div class="row">
-            <button class="button button--primary" id="verify-run" type="button">Verify with WebCrypto</button>
-            <button class="button" id="verify-latest" type="button">Use latest report</button>
-            <button class="button" id="verify-tamper" type="button">Tamper with the verdict</button>
-          </div>
-          <p class="note" id="verify-keys">Trusted keys come from <a href="/.well-known/signalward-keys.json">/.well-known/signalward-keys.json</a>. Canonicalisation, SHA-256 and Ed25519 run locally. Nothing is sent to the server.</p>
-          <ol class="checks" id="verify-result" aria-live="polite"></ol>
-        </div>
-      </section>
+        <section class="card" data-panel="activity" aria-labelledby="events-title" hidden>
+          <div class="card-head"><h2 id="events-title">Live events</h2><span class="meta" id="events-state">connecting…</span></div>
+          <ol class="events" id="events"><li class="muted">Waiting for activity.</li></ol>
+        </section>
+        <section class="card" data-panel="activity" aria-labelledby="block-title" hidden>
+          <div class="card-head"><h2 id="block-title">Blocklist</h2><span class="meta">keyed tags</span></div>
+          <div class="list" id="blocklist"></div>
+        </section>
+      </div>
 
-      <section class="panel" id="panel-activity" data-panel="activity" aria-labelledby="activity-title" hidden>
-        <p class="eyebrow">Workspace</p>
-        <h1 id="activity-title">Session, live activity and blocklist.</h1>
-        <div class="cols">
-          <div class="box">
-            <h2>Session</h2>
-            <dl class="kv" id="session-details"></dl>
-          </div>
-          <div class="box">
-            <h2>Live events <span class="live" aria-hidden="true">●</span></h2>
-            <ol class="events" id="events" aria-live="polite"><li class="muted">Waiting for events…</li></ol>
-          </div>
-        </div>
-        <div class="box">
-          <h2>Reports in this workspace</h2>
-          <div class="table-wrap"><table><thead><tr><th scope="col">Report</th><th scope="col">Type</th><th scope="col">Verdict</th><th scope="col">Findings</th><th scope="col">Created</th></tr></thead><tbody id="history"><tr><td colspan="5" class="muted">No reports yet.</td></tr></tbody></table></div>
-        </div>
-        <div class="box">
-          <h2>Indicator blocklist</h2>
-          <div class="table-wrap"><table><thead><tr><th scope="col">Type</th><th scope="col">Indicator</th><th scope="col">Tag</th><th scope="col">Added</th><th scope="col"><span class="sr-only">Action</span></th></tr></thead><tbody id="blocklist"><tr><td colspan="5" class="muted">Nothing blocked.</td></tr></tbody></table></div>
-        </div>
-      </section>
-
-      <section class="report" id="report" aria-live="polite" hidden></section>
-    </main>
-  </div>
+      <div class="span-7 stack" id="output" aria-live="polite">
+        <section class="card empty" id="empty">
+          <div class="empty__art" aria-hidden="true"><span></span><span></span><span></span></div>
+          <b>Results appear here</b>
+          <p>Pick a scan on the left, or try one of the samples.</p>
+        </section>
+        <section class="card" data-panel="activity" aria-labelledby="history-title" hidden>
+          <div class="card-head"><h2 id="history-title">Recent reports</h2><a class="pill pill--line pill--sm" href="/account">All in profile</a></div>
+          <div class="list" id="history"></div>
+        </section>
+      </div>
+    </div>
+  </main>
 </body>
 </html>

@@ -1,16 +1,11 @@
-import { createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
-/** Load a 32-byte secret from the environment, else from the git-ignored state directory, else create it. */
-export function loadSecret(stateDir: string, envName: string, fileName: string, env: NodeJS.ProcessEnv = process.env): Buffer {
-  const configured = env[envName];
-  if (configured) {
-    const value = Buffer.from(configured, "base64");
-    if (value.length < 32) throw new Error(`${envName} must be at least 32 bytes, base64 encoded.`);
-    return value;
-  }
+/** Use a configured base64 secret, else a git-ignored development secret under the state directory. */
+export function resolveSecret(configured: string | null, stateDir: string, fileName: string): Buffer {
+  if (configured) return Buffer.from(configured, "base64");
   const file = join(stateDir, fileName);
   if (existsSync(file)) return Buffer.from(readFileSync(file, "utf8").trim(), "base64");
   mkdirSync(stateDir, { recursive: true });
@@ -19,32 +14,37 @@ export function loadSecret(stateDir: string, envName: string, fileName: string, 
   return value;
 }
 
-/** Per-workspace indicator key, derived so one master secret never tags two workspaces the same way. */
-export function deriveIndicatorKey(master: Buffer, workspace: string, keyVersion: string): Buffer {
-  return Buffer.from(hkdfSync("sha256", master, Buffer.from(workspace), Buffer.from(`signalward/indicator/${keyVersion}`), 32));
+export function deriveKey(master: Buffer, salt: string, info: string): Buffer {
+  return Buffer.from(hkdfSync("sha256", master, Buffer.from(salt), Buffer.from(info), 32));
 }
 
-export type SessionClaims = { v: 1; wid: string; sid: string; iat: number; exp: number };
-export const SESSION_TTL_SECONDS = 12 * 60 * 60;
-export const SESSION_COOKIE = "sw_session";
-
-export function signSession(secret: Buffer, claims: SessionClaims): string {
-  const body = Buffer.from(JSON.stringify(claims)).toString("base64url");
-  const mac = createHmac("sha256", secret).update(`sw1.${body}`).digest("base64url");
-  return `sw1.${body}.${mac}`;
+/** Per-user indicator key: one master secret never produces the same tag for two accounts. */
+export function deriveIndicatorKey(master: Buffer, userId: string, keyVersion: string): Buffer {
+  return deriveKey(master, userId, `signalward/indicator/${keyVersion}`);
 }
 
-export function verifySession(secret: Buffer, token: string | undefined, now = Date.now()): SessionClaims | null {
-  if (!token || token.length > 1024) return null;
-  const [prefix, body, mac] = token.split(".");
-  if (prefix !== "sw1" || !body || !mac) return null;
-  const expected = createHmac("sha256", secret).update(`sw1.${body}`).digest();
-  const given = Buffer.from(mac, "base64url");
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
+/**
+ * Authenticated encryption for cookies (AES-256-GCM). Contents are confidential and tamper-evident;
+ * the expiry inside the payload is checked on every open.
+ */
+export function seal(key: Buffer, payload: Record<string, unknown>): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const body = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+  return `v1.${Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64url")}`;
+}
+
+export function open<T extends { exp: number }>(key: Buffer, token: string | undefined, now = Date.now()): T | null {
+  if (!token || token.length > 3800 || !token.startsWith("v1.")) return null;
   try {
-    const claims = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as SessionClaims;
-    if (claims.v !== 1 || typeof claims.wid !== "string" || typeof claims.exp !== "number" || claims.exp * 1000 <= now) return null;
-    return claims;
+    const raw = Buffer.from(token.slice(3), "base64url");
+    if (raw.length < 29) return null;
+    const decipher = createDecipheriv("aes-256-gcm", key, raw.subarray(0, 12));
+    decipher.setAuthTag(raw.subarray(12, 28));
+    const text = Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString("utf8");
+    const payload = JSON.parse(text) as T;
+    if (typeof payload.exp !== "number" || payload.exp * 1000 <= now) return null;
+    return payload;
   } catch {
     return null;
   }
@@ -52,25 +52,26 @@ export function verifySession(secret: Buffer, token: string | undefined, now = D
 
 export function readCookie(request: IncomingMessage, name: string): string | undefined {
   for (const part of (request.headers.cookie ?? "").split(";")) {
-    const [key, ...rest] = part.trim().split("=");
-    if (key === name) return rest.join("=");
+    const index = part.indexOf("=");
+    if (index < 0) continue;
+    if (part.slice(0, index).trim() === name) return part.slice(index + 1).trim();
   }
   return undefined;
 }
 
-export function sessionCookie(token: string, maxAge: number): string {
-  return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}`;
+export function cookie(name: string, value: string, maxAge: number, secure: boolean): string {
+  return `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
 }
 
 /**
- * Same-origin gate for state-changing requests. Browsers always send Origin on cross-origin POSTs, and
- * Sec-Fetch-Site when supported, so a request from another site is refused before it reaches a handler.
+ * Same-origin gate for state-changing requests. Browsers send Origin on cross-origin POSTs and
+ * Sec-Fetch-Site when supported, so a request initiated by another site is refused before routing.
  */
 export function sameOrigin(request: IncomingMessage): boolean {
   const site = request.headers["sec-fetch-site"];
   if (site && site !== "same-origin" && site !== "none") return false;
   const origin = request.headers.origin;
-  if (!origin) return site === "same-origin" || site === "none" || request.method === "GET";
+  if (!origin) return site === "same-origin" || site === "none";
   try {
     return new URL(origin).host === request.headers.host;
   } catch {
@@ -78,11 +79,11 @@ export function sameOrigin(request: IncomingMessage): boolean {
   }
 }
 
-/** Fixed-window limiter keyed by caller. Small and in-memory, which suits one local process. */
+/** Fixed-window limiter keyed by caller. In-memory, which suits one process. */
 export class RateLimiter {
   #windows = new Map<string, { start: number; count: number }>();
-  limit: number;
-  windowMs: number;
+  readonly limit: number;
+  readonly windowMs: number;
   constructor(limit: number, windowMs: number) {
     this.limit = limit;
     this.windowMs = windowMs;
@@ -91,11 +92,11 @@ export class RateLimiter {
     const window = this.#windows.get(key);
     if (!window || now - window.start >= this.windowMs) {
       this.#windows.set(key, { start: now, count: 1 });
-      if (this.#windows.size > 5000) this.#windows.delete(this.#windows.keys().next().value as string);
+      if (this.#windows.size > 10_000) this.#windows.delete(this.#windows.keys().next().value as string);
       return { ok: true, retryAfter: 0 };
     }
     window.count += 1;
-    return window.count <= this.limit ? { ok: true, retryAfter: 0 } : { ok: false, retryAfter: Math.ceil((window.start + this.windowMs - now) / 1000) };
+    return window.count <= this.limit ? { ok: true, retryAfter: 0 } : { ok: false, retryAfter: Math.max(1, Math.ceil((window.start + this.windowMs - now) / 1000)) };
   }
 }
 

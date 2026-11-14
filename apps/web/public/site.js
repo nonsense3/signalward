@@ -1,289 +1,173 @@
-const motionQuery = matchMedia("(prefers-reduced-motion: reduce)");
-const compact = matchMedia("(max-width: 680px)").matches || (navigator.deviceMemory ?? 8) <= 2;
-const root = document.documentElement;
-const stage = document.querySelector(".stage");
-const canvas = stage.querySelector("canvas");
-const hud = Object.fromEntries([...document.querySelectorAll("[data-hud]")].map((el) => [el.dataset.hud, el]));
+import { $, $$, api, h, init, navigate, reducedMotion, reportError, setFieldError, currentTheme, VERDICT } from "./ui.js";
 
-/* ---------- Sample scan (works without WebGL) ---------- */
+init();
 
-const sampleButton = document.querySelector("#sample");
-const sampleResult = document.querySelector("#sample-result");
+const stage = $(".stage");
+const canvas = $("canvas", stage);
+const heroCard = $('[data-frame="hero"]');
+const dock = $('[data-frame="dock"]');
+const dockLabel = $('[data-hud="label"]');
+const chapters = $$(".chapter");
+const hud = { count: $('[data-hud="count"]'), frame: $('[data-hud="frame"]') };
+
+/* ---------- Sample scan (works without WebGL or an account) ---------- */
+const sampleButton = $("#sample");
+const sampleResult = $("#sample-result");
 sampleButton.addEventListener("click", async () => {
   sampleButton.disabled = true;
   sampleResult.hidden = false;
-  sampleResult.textContent = "Scanning the synthetic repository…";
+  sampleResult.replaceChildren(h("div", { class: "skeleton", css: { height: "3.2rem" } }));
   try {
-    const response = await fetch("/api/sample-scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    if (!response.ok) throw new Error("failed");
-    const report = await response.json();
-    const title = document.createElement("strong");
-    title.textContent = `Policy result: ${report.result} · ${report.findings} findings`;
-    const location = document.createElement("code");
-    location.textContent = `${report.finding.location}  ${report.finding.evidence}`;
-    const text = document.createElement("p");
-    text.textContent = `${report.summary} ${report.finding.remediation} `;
-    const more = document.createElement("a");
-    more.className = "link";
-    more.href = "/scan#repository";
-    more.textContent = "See the full report ↗";
-    text.append(more);
-    sampleResult.replaceChildren(title, location, text);
-  } catch {
-    sampleResult.textContent = "The sample could not run. Check that the local server is still running.";
+    const report = await api("/api/sample-scan", { method: "POST", body: {} });
+    const verdict = VERDICT[report.result] ?? { label: report.result, tone: "info" };
+    sampleResult.replaceChildren(
+      h("div", { class: "sample__head" }, h("b", { text: `${report.findings} findings in a synthetic repo` }), h("span", { class: `tag tag--${verdict.tone}`, text: verdict.label })),
+      h("code", { text: `${report.finding.location} · ${report.finding.evidence}` }),
+      h("a", { href: "/scan#repository", text: "Open the full report →" }));
+  } catch (error) {
+    sampleResult.hidden = true;
+    reportError(error);
   } finally {
     sampleButton.disabled = false;
   }
 });
 
-/* ---------- Text scramble ---------- */
+/* ---------- CTA ---------- */
+$("#cta-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const input = event.currentTarget.elements.url;
+  const value = input.value.trim();
+  if (!value) return setFieldError(input, "Paste a link or domain first.");
+  if (value.length > 2048) return setFieldError(input, "That link is longer than 2048 characters.");
+  navigate(`/scan?url=${encodeURIComponent(value)}#url`);
+});
 
-const GLYPHS = "▚▞▖▗▘▝#%&/<>=+*01ABCDEFXYZ";
-function prepareScramble(element) {
-  if (element.dataset.ready) return;
-  const text = element.textContent;
-  element.dataset.ready = "1";
-  element.textContent = "";
-  const real = document.createElement("span");
-  real.className = "sr-only";
-  real.textContent = text;
-  const shown = document.createElement("span");
-  shown.setAttribute("aria-hidden", "true");
-  shown.textContent = text;
-  element.append(real, shown);
-  element._scramble = { text, shown };
+/* ---------- Statement: words light up as it scrolls through ---------- */
+const statement = $("[data-words]");
+const words = statement.textContent.trim().split(/\s+/).map((word) => h("span", { class: "w", text: word }));
+statement.replaceChildren(...words.flatMap((word, index) => (index ? [" ", word] : [word])));
+statement.setAttribute("aria-label", statement.textContent);
+function updateWords() {
+  const rect = statement.getBoundingClientRect();
+  const progress = Math.min(1, Math.max(0, (innerHeight * 0.85 - rect.top) / (rect.height + innerHeight * 0.35)));
+  const lit = Math.round(progress * words.length);
+  words.forEach((word, index) => word.classList.toggle("on", index < lit));
 }
-function scramble(element, duration = 900) {
-  const { text, shown } = element._scramble ?? {};
-  if (!shown || motionQuery.matches) return;
-  const start = performance.now();
-  const step = (now) => {
-    const t = Math.min(1, (now - start) / duration);
-    let out = "";
-    for (let i = 0; i < text.length; i++) {
-      const settle = i / text.length * 0.7 + 0.3;
-      out += text[i] === " " || t >= settle ? text[i] : GLYPHS[(Math.random() * GLYPHS.length) | 0];
-    }
-    shown.textContent = out;
-    if (t < 1) requestAnimationFrame(step);
-  };
-  requestAnimationFrame(step);
+
+/* ---------- Frame tracking: the canvas lives in the hero card, then in the observatory dock ---------- */
+const smooth = (current, target, rate, dt) => current + (target - current) * Math.min(1, dt * rate);
+function frameRect() {
+  const d = dock.getBoundingClientRect();
+  if (d.top < innerHeight && d.bottom > 0) return { rect: d, where: "dock" };
+  return { rect: heroCard.getBoundingClientRect(), where: "hero" };
 }
-const scrambles = [...document.querySelectorAll("[data-scramble]")];
-scrambles.forEach(prepareScramble);
+function applyClip(rect) {
+  const s = stage.style;
+  s.setProperty("--ct", `${Math.max(-2, rect.top)}px`);
+  s.setProperty("--cl", `${rect.left}px`);
+  s.setProperty("--cr", `${innerWidth - rect.right}px`);
+  s.setProperty("--cb", `${innerHeight - rect.bottom}px`);
+}
 
-/* ---------- Chapters and reveal ---------- */
-
-const sections = [...document.querySelectorAll("[data-shape]")];
-const navLinks = [...document.querySelectorAll("nav a")];
-hud.total.textContent = String(sections.length - 1).padStart(2, "0");
-
-if (!motionQuery.matches) root.classList.add("reveal-ready");
-const revealObserver = new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    if (!entry.isIntersecting) continue;
-    entry.target.classList.add("is-visible");
-    entry.target.querySelectorAll("[data-scramble]").forEach((el, index) => setTimeout(() => scramble(el), 120 + index * 180));
-    revealObserver.unobserve(entry.target);
+function activeChapter() {
+  let best = null, bestDistance = Infinity;
+  for (const chapter of chapters) {
+    const rect = chapter.getBoundingClientRect();
+    const distance = Math.abs(rect.top + rect.height / 2 - innerHeight / 2);
+    if (distance < bestDistance && rect.bottom > 0 && rect.top < innerHeight) { best = chapter; bestDistance = distance; }
   }
-}, { threshold: 0.25 });
-sections.forEach((section) => revealObserver.observe(section));
-
-let layout = [];
-function measure() {
-  layout = sections.map((section) => {
-    const rect = section.getBoundingClientRect();
-    const top = rect.top + scrollY;
-    return {
-      mid: top + rect.height / 2, top, height: rect.height, el: section,
-      shape: Number(section.dataset.shape), case: Number(section.dataset.case ?? 0), prism: Number(section.dataset.prism ?? 0),
-    };
-  });
+  return best;
 }
-measure();
-new ResizeObserver(measure).observe(document.body);
-addEventListener("load", measure);
-
-const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-const lerp = (a, b, t) => a + (b - a) * t;
-
-function chapterState(scroll) {
-  const center = scroll + innerHeight * 0.5;
-  if (!layout.length) return { a: layout[0], b: layout[0], f: 0, index: 0 };
-  if (center <= layout[0].mid) return { a: layout[0], b: layout[0], f: 0, index: 0 };
-  for (let i = 0; i < layout.length - 1; i++) {
-    if (center < layout[i + 1].mid) {
-      const f = smoothstep(0.28, 0.72, (center - layout[i].mid) / (layout[i + 1].mid - layout[i].mid));
-      // Once a transition completes, report the destination alone so "holding" a chapter is exact.
-      if (f >= 1) return { a: layout[i + 1], b: layout[i + 1], f: 0, index: i + 1 };
-      return { a: layout[i], b: layout[i + 1], f, index: f > 0.5 ? i + 1 : i };
-    }
-  }
-  const last = layout[layout.length - 1];
-  return { a: last, b: last, f: 0, index: layout.length - 1 };
-}
-
-/* ---------- Footer hover forms ---------- */
-
-const footer = document.querySelector(".footer");
-const footerShape = Number(footer.dataset.shape);
-/** Active footer morph: from one formation to another, independent of scroll. */
-let morph = null;
-function morphTo(next) {
-  const current = morph ? (morph.mix > 0.5 ? morph.to : morph.from) : footerShape;
-  if (morph?.to === next) return;
-  morph = { from: current, to: next, mix: current === next ? 1 : 0 };
-}
-for (const link of document.querySelectorAll("[data-form]")) {
-  const enter = () => morphTo(Number(link.dataset.form));
-  const leave = () => morphTo(footerShape);
-  link.addEventListener("pointerenter", enter);
-  link.addEventListener("focus", enter);
-  link.addEventListener("pointerleave", leave);
-  link.addEventListener("blur", leave);
-}
-
-/* ---------- Scene loop ---------- */
 
 let scene = null;
-let smoothScroll = scrollY;
-let lastScroll = scrollY;
-let lastFrame = performance.now();
-let loop = 0;
-let activeIndex = -1;
-let frameAvg = 16;
+let shown = 0, target = 0;
+let lastScroll = scrollY, lastFrame = performance.now(), frameAvg = 16, currentChapter = null;
 
 function tick(now) {
-  loop = requestAnimationFrame(tick);
+  requestAnimationFrame(tick);
   const dt = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
-  smoothScroll += (scrollY - smoothScroll) * Math.min(1, dt * 9);
-  const velocity = (smoothScroll - lastScroll) / Math.max(dt, 0.001);
-  lastScroll = smoothScroll;
+  updateWords();
+  const { rect, where } = frameRect();
+  applyClip(rect);
 
-  const chapter = chapterState(smoothScroll);
+  const chapter = where === "dock" ? activeChapter() : null;
+  if (chapter !== currentChapter) {
+    currentChapter = chapter;
+    chapters.forEach((item) => item.classList.toggle("is-active", item === chapter));
+    if (chapter) dockLabel.textContent = chapter.dataset.label;
+  }
+  if (!scene) return;
+
   const s = scene.state;
-  const inFooter = chapter.a.el === footer && chapter.b.el === footer;
-  if (inFooter && morph) {
-    morph.mix = Math.min(1, morph.mix + dt * 1.4);
-    s.shapeA = morph.from;
-    s.shapeB = morph.to;
-    s.mix = morph.mix;
-  } else {
-    if (!inFooter) morph = null;
-    s.shapeA = chapter.a.shape;
-    s.shapeB = chapter.b.shape;
-    s.mix = chapter.f;
+  const visible = rect.bottom > 0 && rect.top < innerHeight && rect.width > 4;
+  if (!visible) return;
+  s.clip = { x: rect.left, y: rect.top, w: rect.width, h: rect.height };
+  const wide = innerWidth > 820;
+  let cx = ((rect.left + rect.width / 2) / innerWidth) * 2 - 1;
+  let cy = 1 - ((rect.top + rect.height / 2) / innerHeight) * 2;
+  const hh = Math.min(1, rect.height / innerHeight);
+  if (where === "hero") {
+    if (wide) cx += 0.32 * (rect.width / innerWidth);
+    else cy += 0.22;
   }
-  s.caseBlend = lerp(chapter.a.case, chapter.b.case, chapter.f);
-  s.prismBlend = lerp(chapter.a.prism, chapter.b.prism, chapter.f);
-  const wave = Math.sin(Math.PI * s.mix);
-  const speed = Math.min(1, Math.abs(velocity) / 2400);
-  s.energy = lerp(s.energy, wave * 0.9 + speed * 0.7, Math.min(1, dt * 6));
-  s.aberration = lerp(s.aberration, wave * 0.7 + speed * 1.4, Math.min(1, dt * 6));
+  s.view.cx = smooth(s.view.cx, cx, 14, dt);
+  s.view.cy = smooth(s.view.cy, cy, 14, dt);
+  s.view.h = smooth(s.view.h, where === "hero" ? hh : hh * 0.92, 6, dt);
 
-  if (chapter.index !== activeIndex) {
-    activeIndex = chapter.index;
-    hud.chapter.textContent = String(activeIndex).padStart(2, "0");
-    const id = layout[activeIndex]?.el.id;
-    navLinks.forEach((link) => link.classList.toggle("is-current", link.hash === `#${id}`));
+  // Formation: hero keeps the spectral stream; each chapter has its own shape. Morphs run on time, not scroll.
+  const next = chapter ? Number(chapter.dataset.shape) : 0;
+  if (next !== target) {
+    shown = s.mix > 0.5 ? s.shapeB : s.shapeA;
+    target = next;
+    s.shapeA = shown;
+    s.shapeB = target;
+    s.mix = 0;
   }
-  const max = document.documentElement.scrollHeight - innerHeight;
-  hud.progress.style.width = `${(max > 0 ? smoothScroll / max : 0) * 100}%`;
+  s.mix = Math.min(1, s.mix + dt / 1.3);
+  s.prismBlend = smooth(s.prismBlend, where === "hero" ? 1 : 0, 3, dt);
+  // The glass case crowds the small mobile dock, so it only appears on wide screens.
+  s.caseBlend = smooth(s.caseBlend, where === "dock" && wide ? 1 : 0, 3, dt);
+  const velocity = Math.abs(scrollY - lastScroll) / Math.max(dt, 0.001);
+  lastScroll = scrollY;
+  const wave = Math.sin(Math.PI * s.mix);
+  const speed = Math.min(1, velocity / 2600);
+  s.energy = smooth(s.energy, wave * 0.9 + speed * 0.6, 6, dt);
+  s.aberration = smooth(s.aberration, wave * 0.6 + speed * 1.2, 6, dt);
 }
+requestAnimationFrame(tick);
 
 addEventListener("pointermove", (event) => {
   if (!scene) return;
-  const x = (event.clientX / innerWidth) * 2 - 1;
-  const y = 1 - (event.clientY / innerHeight) * 2;
-  scene.pointer(x, y, event.pointerType !== "touch" || event.pressure > 0);
-  hud.pointer.textContent = `${x >= 0 ? "+" : ""}${x.toFixed(3)} ${y >= 0 ? "+" : ""}${y.toFixed(3)}`;
+  const c = scene.state.clip;
+  const inside = c && event.clientX >= c.x && event.clientX <= c.x + c.w && event.clientY >= c.y && event.clientY <= c.y + c.h;
+  scene.pointer((event.clientX / innerWidth) * 2 - 1, 1 - (event.clientY / innerHeight) * 2, Boolean(inside) && (event.pointerType !== "touch" || event.pressure > 0));
 }, { passive: true });
 document.addEventListener("pointerleave", () => scene?.pointer(0, 0, false));
-addEventListener("pointerup", (event) => { if (event.pointerType === "touch") scene?.pointer(0, 0, false); });
-
-/* ---------- Boot ---------- */
-
-const boot = document.querySelector(".boot");
-const bootSteps = Object.fromEntries([...boot.querySelectorAll("[data-step]")].map((el) => [el.dataset.step, el]));
-const bootCount = boot.querySelector(".boot__count");
-const bootBar = boot.querySelector(".boot__bar span");
-let bootProgress = 0;
-
-function bootStep(name, detail) {
-  const el = bootSteps[name];
-  if (!el) return;
-  el.classList.add("is-ok");
-  el.querySelector("i").textContent = detail ?? "ok";
-  bootProgress += 25;
-  bootCount.textContent = String(bootProgress).padStart(3, "0");
-  bootBar.style.width = `${bootProgress}%`;
-}
-function finishBoot() {
-  boot.classList.add("is-done");
-  scrambles.filter((el) => el.closest(".hero")).forEach((el, index) => setTimeout(() => scramble(el, 1100), 200 + index * 260));
-}
-const skip = () => finishBoot();
-addEventListener("keydown", skip, { once: true });
-boot.addEventListener("pointerdown", skip, { once: true });
 
 async function startMotion() {
-  if (motionQuery.matches) {
+  if (reducedMotion()) {
     scene?.pause();
-    cancelAnimationFrame(loop);
     stage.classList.remove("is-live");
     return;
   }
   try {
     const { startScene } = await import("./scene.js");
-    if (motionQuery.matches) return;
-    scene ??= startScene(canvas, { compact });
+    const compact = matchMedia("(max-width: 680px)").matches || (navigator.deviceMemory ?? 8) <= 2;
+    scene ??= startScene(canvas, { compact, light: currentTheme() === "light" });
     scene.resume();
     stage.classList.add("is-live");
     hud.count.textContent = scene.count.toLocaleString("en");
-    cancelAnimationFrame(loop);
-    lastFrame = performance.now();
-    loop = requestAnimationFrame(tick);
     canvas.addEventListener("scene:frame", (event) => {
-      frameAvg = frameAvg * 0.95 + event.detail.dt * 1000 * 0.05;
+      frameAvg = frameAvg * 0.94 + event.detail.dt * 1000 * 0.06;
       hud.frame.textContent = `${frameAvg.toFixed(1)} ms`;
     });
-    canvas.addEventListener("scene:lost", () => { stage.classList.remove("is-live"); cancelAnimationFrame(loop); }, { once: true });
-    return `ok · ${scene.count.toLocaleString("en")} particles`;
+    canvas.addEventListener("scene:lost", () => stage.classList.remove("is-live"), { once: true });
   } catch (error) {
+    console.warn("Scene unavailable, showing the static poster:", error instanceof Error ? error.message : error);
     stage.classList.remove("is-live");
-    return `static poster (${error instanceof Error ? error.message : "WebGL unavailable"})`;
   }
 }
-
-(async () => {
-  if (motionQuery.matches) {
-    boot.classList.add("is-done");
-    return;
-  }
-  bootSteps.policy.classList.add("is-running");
-  bootStep("policy");
-  const keys = fetch("/.well-known/signalward-keys.json").then((r) => r.json()).then((set) => set.keys?.[0]?.kid ?? "none").catch(() => "unavailable");
-  bootSteps.keys.classList.add("is-running");
-  bootStep("keys", await keys);
-  bootSteps.fonts.classList.add("is-running");
-  await Promise.race([document.fonts.ready, new Promise((resolve) => setTimeout(resolve, 1500))]);
-  bootStep("fonts", document.fonts.check("16px 'Mona Sans'") ? "ok" : "fallback");
-  bootSteps.scene.classList.add("is-running");
-  bootStep("scene", await startMotion());
-  setTimeout(finishBoot, 450);
-})();
-
-motionQuery.addEventListener("change", () => {
-  if (motionQuery.matches) {
-    startMotion();
-    root.classList.remove("reveal-ready");
-  } else {
-    startMotion();
-  }
-});
-document.addEventListener("visibilitychange", () => {
-  if (!scene) return;
-  if (document.hidden) cancelAnimationFrame(loop);
-  else if (!motionQuery.matches) { lastFrame = performance.now(); loop = requestAnimationFrame(tick); }
-});
+addEventListener("themechange", (event) => scene?.setLight(event.detail === "light"));
+matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", startMotion);
+startMotion();

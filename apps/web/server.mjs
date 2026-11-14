@@ -2,50 +2,83 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createApi } from "./src/api.ts";
-import { SECURITY_HEADERS, loadSecret } from "./src/security.ts";
+import { LocalAuth, SupabaseAuth } from "./src/auth.ts";
+import { ConfigError, loadEnvFile, readConfig } from "./src/env.ts";
+import { SECURITY_HEADERS, deriveKey, resolveSecret } from "./src/security.ts";
+import { LocalStore, SupabaseStore } from "./src/store.ts";
 import { loadSigningKey } from "../../packages/receipts/src/index.ts";
 
-const stateDir = process.env.SIGNALWARD_STATE_DIR ?? fileURLToPath(new URL("../../.signalward/", import.meta.url));
+const root = fileURLToPath(new URL("../../", import.meta.url));
 
+let config;
+try {
+  config = readConfig(loadEnvFile(`${root}.env`), { stateDir: `${root}.signalward` });
+} catch (error) {
+  if (error instanceof ConfigError) {
+    console.error(`SignalWard cannot start.\n${error.message}\n\nEdit .env (see .env.example) and try again.`);
+    process.exit(1);
+  }
+  throw error;
+}
+
+const sessionSecret = resolveSecret(config.secrets.session, config.stateDir, "session-secret");
+const supabase = config.auth.supabase;
 const api = createApi({
-  sessionSecret: loadSecret(stateDir, "SIGNALWARD_SESSION_SECRET", "session-secret"),
-  indicatorMaster: loadSecret(stateDir, "SIGNALWARD_INDICATOR_KEY", "indicator-master"),
-  signingKey: loadSigningKey(stateDir),
+  auth: supabase ? new SupabaseAuth(supabase.url, supabase.anonKey) : new LocalAuth(config.stateDir),
+  store: supabase ? new SupabaseStore(supabase.url, supabase.anonKey) : new LocalStore(config.stateDir),
+  cookieKey: deriveKey(sessionSecret, "signalward", "signalward/cookie/v1"),
+  indicatorMaster: resolveSecret(config.secrets.indicator, config.stateDir, "indicator-master"),
+  signingKey: loadSigningKey(config.stateDir, config.secrets.signing ? { SIGNALWARD_SIGNING_KEY: config.secrets.signing } : {}),
+  ai: config.ai,
+  publicUrl: config.publicUrl,
+  secureCookies: config.secureCookies,
+  allowSignup: config.auth.allowSignup,
 });
 
+const html = (file) => [file, "text/html; charset=utf-8"];
 /** Explicit allowlist: nothing outside this table is served, so path traversal has nothing to reach. */
 const assets = new Map([
-  ["/", ["index.html", "text/html; charset=utf-8"]],
-  ["/scan", ["scan.html", "text/html; charset=utf-8"]],
-  ["/site.css", ["site.css", "text/css; charset=utf-8"]],
-  ["/app.css", ["app.css", "text/css; charset=utf-8"]],
-  ["/site.js", ["site.js", "text/javascript; charset=utf-8"]],
-  ["/scene.js", ["scene.js", "text/javascript; charset=utf-8"]],
-  ["/shapes.js", ["shapes.js", "text/javascript; charset=utf-8"]],
-  ["/console.js", ["console.js", "text/javascript; charset=utf-8"]],
-  ["/verify.js", ["verify.js", "text/javascript; charset=utf-8"]],
+  ["/", html("index.html")],
+  ["/scan", html("scan.html")],
+  ["/account", html("account.html")],
+  ["/auth", html("auth.html")],
+  ["/auth/callback", html("auth.html")],
+  ["/verify", html("verify.html")],
+  ...["base.css", "site.css", "app.css"].map((name) => [`/${name}`, [name, "text/css; charset=utf-8"]]),
+  ...["theme.js", "ui.js", "site.js", "scene.js", "shapes.js", "console.js", "verify.js", "verify-page.js", "auth.js", "account.js"].map((name) => [`/${name}`, [name, "text/javascript; charset=utf-8"]]),
   ["/poster.svg", ["poster.svg", "image/svg+xml"]],
   ["/favicon.svg", ["favicon.svg", "image/svg+xml"]],
-  ["/fonts/MonaSansVF.woff2", ["fonts/MonaSansVF.woff2", "font/woff2"]],
-  ["/fonts/MonaspaceNeon-Regular.woff2", ["fonts/MonaspaceNeon-Regular.woff2", "font/woff2"]],
+  ...["MonaSansVF.woff2", "HubotSansVF.woff2", "MonaspaceNeon-Regular.woff2"].map((name) => [`/fonts/${name}`, [`fonts/${name}`, "font/woff2"]]),
 ]);
+const PROTECTED = new Set(["/scan", "/account"]);
+
+async function notFoundPage(response) {
+  response.writeHead(404, { ...SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" });
+  response.end(await readFile(new URL("./public/404.html", import.meta.url)).catch(() => "Not found"));
+}
 
 export async function handleRequest(request, response) {
-  let path;
+  let url;
   try {
-    path = new URL(request.url ?? "/", "http://localhost").pathname;
+    url = new URL(request.url ?? "/", "http://localhost");
   } catch {
-    response.writeHead(400).end("Bad request");
+    response.writeHead(400, SECURITY_HEADERS).end("Bad request");
     return;
   }
+  let path = url.pathname;
   if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
-  if (path === "/scan.html") path = "/scan";
+  if (path.endsWith(".html") && assets.has(path.slice(0, -5))) path = path.slice(0, -5);
 
   if (await api.handle(request, response, path)) return;
 
-  const asset = (request.method === "GET" || request.method === "HEAD") && assets.get(path);
-  if (!asset) {
-    response.writeHead(404, { ...SECURITY_HEADERS, "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    response.writeHead(405, { ...SECURITY_HEADERS, Allow: "GET, HEAD" }).end();
+    return;
+  }
+  const asset = assets.get(path);
+  if (!asset) return notFoundPage(response);
+  if (PROTECTED.has(path) && !api.hasSession(request)) {
+    response.writeHead(303, { ...SECURITY_HEADERS, Location: `/auth?next=${encodeURIComponent(path + url.search)}` }).end();
     return;
   }
   try {
@@ -58,31 +91,34 @@ export async function handleRequest(request, response) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const configuredPort = process.env.PORT;
-  const port = Number(configuredPort ?? 3000);
+process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason instanceof Error ? reason.stack : reason));
 
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    console.error("Set PORT to a whole number between 1 and 65535.");
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const port = config.port ?? 3000;
+  const server = createServer({ requestTimeout: 60_000, headersTimeout: 15_000 }, (request, response) => {
+    handleRequest(request, response).catch((error) => {
+      console.error("Request failed:", error);
+      if (!response.headersSent) response.writeHead(500, SECURITY_HEADERS);
+      response.end();
+    });
+  });
+  server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
+  let triedFallback = false;
+  server.on("error", (error) => {
+    if (error.code === "EADDRINUSE" && config.port === null && !triedFallback) {
+      console.log(`Port ${port} is in use. Selecting an available port.`);
+      triedFallback = true;
+      server.listen(0, config.host);
+      return;
+    }
+    console.error(`SignalWard could not start. ${error.message}`);
     process.exitCode = 1;
-  } else {
-    const server = createServer({ requestTimeout: 30_000, headersTimeout: 10_000 }, handleRequest);
-    let triedFallback = false;
-    server.on("error", error => {
-      if (error.code === "EADDRINUSE" && configuredPort === undefined && !triedFallback) {
-        console.log(`Port ${port} is in use. Selecting an available local port.`);
-        triedFallback = true;
-        server.listen(0, "127.0.0.1");
-        return;
-      }
-      console.error(`SignalWard could not start. ${error.message}`);
-      process.exitCode = 1;
-    });
-    server.on("listening", () => {
-      const url = `http://127.0.0.1:${server.address().port}`;
-      console.log(`SignalWard is running at ${url}`);
-      console.log(`Scanner console: ${url}/scan`);
-    });
-    server.listen(port, "127.0.0.1");
-  }
+  });
+  server.on("listening", () => {
+    const address = `http://${config.host}:${server.address().port}`;
+    console.log(`SignalWard is running at ${address}`);
+    console.log(`  auth: ${config.auth.provider}${config.auth.provider === "supabase" ? ` (${new URL(config.auth.supabase.url).host})` : ""}  ·  summaries: ${config.ai.apiKey ? config.ai.model : "rules"}  ·  env: ${config.nodeEnv}`);
+    for (const warning of config.warnings) console.log(`  note: ${warning}`);
+  });
+  server.listen(port, config.host);
 }

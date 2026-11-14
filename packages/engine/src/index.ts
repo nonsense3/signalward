@@ -11,10 +11,27 @@ export type WorkspaceContext = {
   workspace: string;
   indicatorKey: Uint8Array;
   keyVersion: string;
-  /** Record a sighting and return how many earlier reports in this workspace contained the tag. */
-  observe(tag: string): number;
-  isBlocked(tag: string): boolean;
+  /** Earlier sightings and blocklist membership for these tags, within this workspace only. */
+  lookup(tags: string[]): Promise<{ seen: Map<string, number>; blocked: Set<string> }>;
+  /** Count one sighting of each tag. */
+  record(tags: string[]): Promise<void>;
 };
+
+/** In-memory context for the CLI, tests and the public demo. */
+export function memoryContext(workspace: string, indicatorKey: Uint8Array): WorkspaceContext {
+  const seen = new Map<string, number>();
+  return {
+    workspace,
+    indicatorKey,
+    keyVersion: "k1",
+    async lookup(tags) {
+      return { seen: new Map(tags.map((tag) => [tag, seen.get(tag) ?? 0])), blocked: new Set() };
+    },
+    async record(tags) {
+      for (const tag of new Set(tags)) seen.set(tag, (seen.get(tag) ?? 0) + 1);
+    },
+  };
+}
 
 export function newReportId(): string {
   return `rpt_${randomBytes(9).toString("base64url")}`;
@@ -68,13 +85,16 @@ export function runRepositoryScan(files: readonly SourceFile[], label: string, c
 }
 
 /** Convert raw indicators to keyed tags, correlate them inside the workspace, then drop the raw values. */
-function protectIndicators(raw: readonly RawIndicator[], ctx: WorkspaceContext): { indicators: Indicator[]; findings: Finding[] } {
+async function protectIndicators(raw: readonly RawIndicator[], ctx: WorkspaceContext): Promise<{ indicators: Indicator[]; findings: Finding[] }> {
   const indicators: Indicator[] = [];
   const findings: Finding[] = [];
-  for (const item of raw.slice(0, 50)) {
-    const tag = indicatorTag(ctx.indicatorKey, ctx.keyVersion, item.type, item.normalized);
-    const blocked = ctx.isBlocked(tag);
-    const seenBefore = ctx.observe(tag);
+  const items = raw.slice(0, 50).map((item) => ({ item, tag: indicatorTag(ctx.indicatorKey, ctx.keyVersion, item.type, item.normalized) }));
+  const tags = items.map((entry) => entry.tag);
+  const history = await ctx.lookup(tags);
+  await ctx.record(tags);
+  for (const { item, tag } of items) {
+    const blocked = history.blocked.has(tag);
+    const seenBefore = history.seen.get(tag) ?? 0;
     indicators.push({ type: item.type, display: item.display, tag, keyVersion: ctx.keyVersion, seenBefore, blocked });
     if (blocked) {
       findings.push(finding({ ruleId: "intelligence.workspace_blocklist", category: "intelligence", severity: "high", confidence: "high",
@@ -98,12 +118,12 @@ const FRAUD_SUMMARY: Record<string, string> = {
   inconclusive: "Inconclusive: required checks could not run.",
 };
 
-export function runMessageScan(input: { text: string; sender?: string; subject?: string }, ctx: WorkspaceContext): Report {
+export async function runMessageScan(input: { text: string; sender?: string; subject?: string }, ctx: WorkspaceContext): Promise<Report> {
   const timer = new Timer();
   timer.mark("intake");
   const analysis = analyzeMessage(input);
   timer.mark("detect");
-  const protectedIndicators = protectIndicators(analysis.indicators, ctx);
+  const protectedIndicators = await protectIndicators(analysis.indicators, ctx);
   timer.mark("correlate");
   const findings = [...analysis.findings, ...protectedIndicators.findings];
   const coverage: DetectorCoverage[] = [
@@ -142,7 +162,7 @@ export class ScanInputError extends Error {
   }
 }
 
-export function runUrlScan(rawUrl: string, ctx: WorkspaceContext): Report {
+export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext): Promise<Report> {
   const timer = new Timer();
   const normalized = normalizeTarget(rawUrl);
   if (!normalized.ok) throw new ScanInputError(normalized.code, normalized.message);
@@ -153,7 +173,7 @@ export function runUrlScan(rawUrl: string, ctx: WorkspaceContext): Report {
   const raw: RawIndicator[] = [{ type: "url", display: u.normalized.slice(0, 120), normalized: u.normalized }];
   if (u.registrableDomain) raw.push({ type: "domain", display: u.registrableDomain, normalized: u.registrableDomain });
   if (u.isIp) raw.push({ type: "ipv4", display: u.hostname, normalized: u.hostname });
-  const protectedIndicators = protectIndicators(raw, ctx);
+  const protectedIndicators = await protectIndicators(raw, ctx);
   timer.mark("correlate");
   const findings = [...lexical, ...protectedIndicators.findings];
   const coverage: DetectorCoverage[] = [
