@@ -93,8 +93,8 @@ vec3 stream(vec2 cell, float seed, out float fade){
   float a = hash12(cell * 2.91 + 9.7) * 6.2831;
   float spread = smoothstep(-1.25, 0.15, x) * (1.0 - smoothstep(0.7, 2.9, x));
   float radius = 0.05 + 0.07 * (1.0 - spread);
-  float y = w * spread * 1.6 + sin(x * 1.3 + uTime * 0.6 + w * 3.0) * 0.06;
-  float z = w * spread * 0.35 + sin(a) * radius;
+  float y = w * spread * 1.15 + sin(x * 1.3 + uTime * 0.5 + w * 3.0) * 0.045;
+  float z = w * spread * 0.3 + sin(a) * radius;
   fade = smoothstep(3.3, 2.6, abs(x));
   return vec3(x, y + cos(a) * radius, z);
 }
@@ -121,15 +121,16 @@ void main(){
   vec3 vel = V.xyz;
   float streaming = (uShapeA == 0 ? 1.0 - m : 0.0) + (uShapeB == 0 ? m : 0.0);
   if (streaming > 0.98 && abs(target.x - pos.x) > 2.0) { pos = target + (vec3(seed, fract(seed * 13.1), fract(seed * 71.7)) - 0.5) * 0.1; vel *= 0.0; }
-  float stiffness = mix(2.2, 5.5, seed) * (1.0 - uIntro * 0.85);
+  float stiffness = mix(3.6, 7.6, seed) * (1.0 - uIntro * 0.8);
   vec3 force = (target - pos) * stiffness;
-  force += curl(pos * 0.85 + vec3(0.0, 0.0, uTime * 0.08)) * (0.18 + uEnergy * 1.4 + streaming * 0.35 + uIntro * 2.5);
+  // Steady by default: gentle flow, with turbulence rising only during morphs, scroll and the intro.
+  force += curl(pos * 0.8 + vec3(0.0, 0.0, uTime * 0.06)) * (0.07 + uEnergy * 0.7 + streaming * 0.22 + uIntro * 2.2);
   vec3 toP = pos - uRayO;
   vec3 d = pos - (uRayO + uRayD * dot(toP, uRayD));
   float influence = exp(-dot(d, d) * 5.0) * uPointer;
   force += normalize(d + 1e-5) * influence * 6.0 + cross(uRayD, d) * influence * 9.0 + uPointerVel * influence * 14.0;
   vel += force * uDt;
-  vel *= pow(0.12, uDt);
+  vel *= pow(0.05, uDt);
   pos += vel * uDt;
   oPos = vec4(pos, fade);
   oVel = vec4(vel, mix(flagA, flagB, m));
@@ -153,8 +154,8 @@ void main(){
   vec4 mv = uView * vec4(P.xyz, 1.0);
   gl_Position = uProj * mv;
   gl_Position.xy += uShift * gl_Position.w;
-  float glow = smoothstep(0.15, 2.2, length(V.xyz));
-  gl_PointSize = clamp(uSize * (1.0 + glow * 0.8) / max(-mv.z, 0.1), 1.0, 24.0);
+  float glow = smoothstep(0.15, 1.8, length(V.xyz));
+  gl_PointSize = clamp(uSize * (1.0 + glow * 0.5) / max(-mv.z, 0.1), 1.0, 22.0);
   // Dark: emitted light. Light: absorbance (1 - ink colour), so additive blending darkens toward the ink.
   vec3 emit = mix(mix(vec3(0.32, 0.27, 0.78), vec3(0.61, 0.55, 1.0), smoothstep(0.0, 0.6, glow + 0.35)), vec3(0.96, 0.95, 0.93), smoothstep(0.45, 1.0, glow));
   emit = mix(emit, vec3(1.0, 0.47, 0.4), V.w);

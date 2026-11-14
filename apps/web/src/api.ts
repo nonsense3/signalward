@@ -149,7 +149,30 @@ export function createApi(deps: ApiDeps) {
 
     if (method !== "GET" && !sameOrigin(request)) throw forbidden("Cross-site requests are refused.", "CROSS_ORIGIN");
 
-    if (path === "/api/health" && method === "GET") return ok({ ok: true, auth: deps.auth.kind, signup: deps.allowSignup, recovery: deps.auth.supportsRecovery });
+    if (path === "/api/health" && method === "GET") {
+      return ok({ ok: true, auth: deps.auth.kind, signup: deps.allowSignup, recovery: deps.auth.supportsRecovery, magicLink: deps.auth.supportsMagicLink, oauth: deps.auth.oauthProviders });
+    }
+
+    if (path.startsWith("/api/auth/oauth/") && method === "GET") {
+      const provider = path.slice("/api/auth/oauth/".length);
+      if (!/^[a-z]{2,20}$/.test(provider)) throw notFound("Unknown sign-in provider.");
+      const url = deps.auth.oauthUrl(provider, redirectTo(ctx, "/auth/callback"));
+      if (!url) throw new AppError(501, "AUTH_OAUTH_UNAVAILABLE", "That sign-in method is not available on this server.");
+      const take = limits.signIn.take(ctx.ip);
+      if (!take.ok) throw rateLimited(take.retryAfter);
+      // Top-level redirect to the provider's hosted consent screen; tokens return to /auth/callback.
+      response.writeHead(303, { ...SECURITY_HEADERS, "Cache-Control": "no-store", "X-Request-Id": ctx.rid, Location: url });
+      response.end();
+      return;
+    }
+
+    if (path === "/api/auth/magic-link" && method === "POST") {
+      const take = limits.recover.take(ctx.ip);
+      if (!take.ok) throw rateLimited(take.retryAfter, "Too many sign-in-link requests. Try again later.");
+      const body = validate<{ email: string }>(await readJson(request, 1024), { email: { type: "string", required: true, max: 254, pattern: EMAIL, label: "Email" } });
+      await deps.auth.magicLink(body.email.toLowerCase(), redirectTo(ctx, "/auth/callback"));
+      return ok({ status: "sent" }, 202); // Same answer whether or not the account exists.
+    }
 
     /* --- auth --- */
     if (path === "/api/auth/signup" && method === "POST") {
