@@ -1,132 +1,132 @@
 # ◈ SignalWard
 
-**Deterministic security workspace for repository auditing, fraud analysis, and cryptographically signed evidence receipts.**
+**Security workspace for repository auditing, fraud analysis, and signed evidence receipts.**
 
 [![node >= 24](https://img.shields.io/badge/node-%3E%3D24-brightgreen)](https://nodejs.org/)
-[![zero runtime dependencies](https://img.shields.io/badge/runtime%20deps-zero-success)](package.json)
-[![Ed25519 + SHA-256](https://img.shields.io/badge/signatures-Ed25519-orange)](packages/receipts)
+[![zero runtime deps](https://img.shields.io/badge/dependencies-zero-success)](package.json)
+[![Ed25519 receipts](https://img.shields.io/badge/signatures-Ed25519-orange)](packages/receipts)
+[![deploy to Workers](https://img.shields.io/badge/deploy-Cloudflare%20Workers-f38020)](wrangler.jsonc)
 
 ---
 
 ## What It Does
 
-SignalWard scans **code repositories**, **suspicious messages**, and **untrusted links**, then issues a deterministic verdict with a tamper-proof **Ed25519 receipt** — no network calls to untrusted targets, no runtime npm dependencies.
+SignalWard scans **repositories**, **messages**, and **URLs**, then issues a deterministic verdict with a tamper-proof **Ed25519 receipt**. No external npm dependencies. No outbound requests to untrusted targets.
 
 | Scanner | Detects |
 |---------|---------|
 | **Repository** | Leaked secrets (AWS, GitHub, Stripe, private keys, …), vulnerable dependencies, insecure CI/CD workflows |
-| **Message** | Social-engineering cues, brand impersonation, payment/credential phishing, prompt-injection attempts |
-| **URL** | Typosquatting, homoglyphs, high-abuse TLDs, open redirects, URL shorteners — all without opening the link |
+| **Message** | Social-engineering cues, brand impersonation, credential/payment phishing, AI prompt injection |
+| **URL** | Typosquatting, homoglyphs, high-abuse TLDs, open redirects — plus optional live threat intel (URLhaus, RDAP domain age, trained ML model) |
 
-Each account gets a profile dashboard, live activity, an indicator blocklist, and an in-browser receipt verifier.
-
----
-
-## Architecture
-
-```
-Inputs (repo · message · URL)
-        │
-   ┌────┴────┐
-   CLI      Web        ← apps/cli  ·  apps/web
-   └────┬────┘
-        │
-    Scan Engine        ← packages/engine
-   ┌────┼────┐
-repo  fraud   url      ← packages/repo-scan · packages/fraud-scan
-   └────┼────┘
-        │
- Deterministic Policy  ← packages/policy
-        │
- Ed25519 Receipts      ← packages/receipts
-
-Web layer              ← apps/web/src
-  env · auth · store · ai · errors · security · api
-  (Supabase Auth + Postgres RLS, or local accounts)
-```
-
-All indicator values (emails, phones, UPI handles, wallets) are redacted and converted to per-account **HMAC-SHA-256 tags** via HKDF — accounts can't correlate each other's data, and row-level security keeps every report, blocklist and profile private to its owner.
+Every indicator (email, phone, UPI, wallet, IBAN) is redacted and stored only as a workspace-keyed **HMAC-SHA-256 tag** — workspaces can't correlate each other's data.
 
 ---
 
 ## Quick Start
 
 ```sh
-cp .env.example .env               # then fill in the values below
-node apps/cli/signalward.ts keys   # prints fresh SignalWard secrets
-node apps/cli/signalward.ts doctor # validates .env and checks Supabase / Gemini
+# 1. Generate secrets
+node apps/cli/signalward.ts keys        # paste output into .env
+
+# 2. Start the server (Node.js >= 24, zero install)
 npm run dev
+
+# 3. Validate your setup
+node apps/cli/signalward.ts doctor
 ```
 
-Open the URL printed in the terminal. Port 3000 is tried first and a free port is chosen if it is busy; set `PORT` to override. In development, missing secrets are generated under `.signalward/` (git-ignored); in production they are required.
-
-- **`/`** — Signal Observatory (landing page)
-- **`/auth`** — sign in, sign up, OAuth, magic link, password reset
-- **`/scan`** — Scanner Console (repository · message · link · activity)
-- **`/account`** — profile dashboard
-- **`/verify`** — independent in-browser receipt verifier
+- **`/`** — Signal Observatory landing page
+- **`/scan`** — Scanner console (repo, message, URL, verify, activity)
+- **`/account`** — User profile & data export
 
 ```sh
-npm test   # deterministic policy tests
+npm test   # run policy tests
 ```
-
----
-
-## Accounts & Authentication
-
-SignalWard runs with **Supabase Auth** when configured, or **local accounts** for offline development.
-
-- **Email + password**, with strength checks and account lockout after repeated failures
-- **Single sign-on**: Continue with **GitHub** or **Google** (Supabase OAuth)
-- **Magic link**: passwordless email sign-in
-- **Password reset** by email
-- Sessions are stored in an **AES-256-GCM encrypted, HttpOnly cookie**; Supabase tokens are refreshed server-side
-- Local account and workspace records are encrypted at rest; local sign-out and password changes revoke all active sessions for that account, and open activity streams close on revocation
-
-OAuth and magic link require Supabase. Enable the GitHub and Google providers in your Supabase dashboard and add `<PUBLIC_URL>/auth/callback` as a redirect URL.
 
 ---
 
 ## CLI
 
 ```sh
-node apps/cli/signalward.ts scan .                         # scan a repository
-node apps/cli/signalward.ts watch .                        # rescan when repository files change
-node apps/cli/signalward.ts scan /path/to/repo --json --out ./artifacts
-node apps/cli/signalward.ts url "https://hdfc-secure-kyc.top/verify"   # zero-fetch URL check
-node apps/cli/signalward.ts verify ./artifacts/<id>.receipt.json \
-  --report ./artifacts/<id>.report.json --keys ./artifacts/signalward-keys.json
-node apps/cli/signalward.ts keys     # generate SignalWard secrets
-node apps/cli/signalward.ts keys rotate-indicators # rotate HMAC tags with retained-key overlap
-node apps/cli/signalward.ts keys rotate-reports # rotate report encryption with retained-key overlap
-node apps/cli/signalward.ts doctor   # validate configuration and connectivity
+# Scan a local checkout
+signalward scan .
+signalward scan /path/to/repo --json --out ./artifacts
+
+# Scan a GitHub repo by URL (public, or private with --token)
+signalward scan owner/repo
+signalward scan https://github.com/owner/repo --ref main --token ghp_...
+
+# Watch a directory and re-scan on changes
+signalward watch .
+
+# Inspect a URL (zero-fetch lexical analysis + optional threat intel)
+signalward url "https://hdfc-secure-kyc.top/verify"
+
+# Ingest Suricata EVE alerts
+signalward suricata --stdin < /var/log/suricata/eve.json
+
+# Verify a receipt offline
+signalward verify ./artifacts/<id>.receipt.json \
+  --report ./artifacts/<id>.report.json \
+  --keys ./artifacts/signalward-keys.json
+
+# MCP server (Model Context Protocol over stdio)
+signalward mcp
+
+# Key management
+signalward keys                    # generate fresh secrets
+signalward keys rotate             # rotate signing key, retain old public keys
+signalward keys rotate-indicators  # rotate indicator master key with overlap
+signalward keys rotate-reports     # rotate report encryption key
 ```
 
 **Exit codes:** `0` pass/valid · `1` block/high-risk/invalid · `2` incomplete/error
 
-## CI Gate
+> All commands are run as `node apps/cli/signalward.ts <command>`.
 
-`.github/workflows/signalward-security.yml` scans every pull request and push with read-only repository permissions. A high-severity secret finding returns a non-zero exit code and fails the check. To make that check prevent merges, require **SignalWard repository security scan** in the repository's branch protection or ruleset settings.
+---
+
+## Deploy to Cloudflare Workers
+
+SignalWard ships a Workers entry (`worker.mjs` + `wrangler.jsonc`). Workers mode requires Supabase for auth and storage.
+
+```sh
+# Set secrets
+wrangler secret put SUPABASE_URL
+wrangler secret put SUPABASE_ANON_KEY
+wrangler secret put PUBLIC_URL
+wrangler secret put SIGNALWARD_SESSION_SECRET
+wrangler secret put SIGNALWARD_INDICATOR_KEY
+wrangler secret put SIGNALWARD_SIGNING_KEY
+wrangler secret put SIGNALWARD_REPORT_ENCRYPTION_KEY
+
+# Deploy
+npx wrangler deploy
+```
+
+> SSE live events are not available on Workers; the console operates without them.
 
 ---
 
 ## API
 
-Scans and account routes require a signed-in session. Public keys are served at `GET /.well-known/signalward-keys.json`.
+Session-based REST API. Public keys at `GET /.well-known/signalward-keys.json`.
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `POST` | `/api/auth/signin` · `/api/auth/signup` | Email + password |
-| `GET`  | `/api/auth/oauth/:provider` | Start GitHub or Google sign-in |
-| `POST` | `/api/auth/magic-link` · `/api/auth/recover` | Passwordless and password reset |
-| `GET`  | `/api/me` · `PATCH /api/me/profile` | Profile and session |
-| `POST` | `/api/scans/repository` · `/message` · `/url` | Run a scan |
-| `GET`  | `/api/reports` · `/api/reports/:id` | Reports and signed receipts |
-| `POST` | `/api/verify` | Verify a receipt against trusted keys |
-| `GET`/`POST`/`DELETE` | `/api/blocklist` | Manage indicator tags |
-| `GET`  | `/api/events` | SSE stream for real-time status |
-
-Every error returns `{ error: { code, message, field?, requestId } }`.
+| `POST` | `/api/auth/*` | Sign up, sign in, OAuth, magic link, refresh, password change |
+| `POST` | `/api/scans/repository` | Scan uploaded files, synthetic samples, or a GitHub URL |
+| `POST` | `/api/scans/message` | Analyse text for fraud signals |
+| `POST` | `/api/scans/url` | Lexically inspect a URL with optional threat intel |
+| `GET`  | `/api/reports` | List reports |
+| `GET`  | `/api/reports/:id` | Full report + receipt + AI brief |
+| `POST` | `/api/verify` | Verify a receipt |
+| `POST` | `/api/blocklist` | Add/remove indicator tags |
+| `GET`  | `/api/events` | SSE stream for real-time updates |
+| `GET/PATCH` | `/api/account/profile` | User profile |
+| `POST` | `/api/account/export` | Export all reports |
+| `POST` | `/api/account/erase` | Delete all user data |
 
 ---
 
@@ -135,24 +135,33 @@ Every error returns `{ error: { code, message, field?, requestId } }`.
 ```
 signalward/
 ├── apps/
-│   ├── cli/signalward.ts          CLI (scan · url · verify · keys · doctor)
+│   ├── cli/signalward.ts             CLI + MCP server + Suricata ingestion
 │   └── web/
-│       ├── server.mjs             HTTP server, static allowlist, security headers
-│       ├── src/env.ts             .env loading & strict validation
-│       ├── src/auth.ts            Supabase + local auth, OAuth, magic link
-│       ├── src/store.ts           Supabase (RLS) and local data stores
-│       ├── src/ai.ts              Optional server-side report summaries
-│       ├── src/api.ts             REST API, sessions, rate limits
-│       ├── src/security.ts        Encrypted cookies, HKDF, origin checks
-│       └── public/                Observatory, console, account, verifier
+│       ├── server.mjs                HTTP server (Node)
+│       ├── src/
+│       │   ├── api.ts                REST API & scan orchestration
+│       │   ├── auth.ts               Supabase OAuth / local password auth
+│       │   ├── store.ts              Local file store + Supabase Postgres store
+│       │   ├── ai.ts                 Gemini-powered report briefs (optional)
+│       │   ├── env.ts                Strict config validation
+│       │   ├── security.ts           CSRF, rate limits, HKDF, cookie encryption
+│       │   └── storage-crypto.ts     AES-256-GCM report encryption at rest
+│       └── public/                   Observatory, console, auth, account, verify pages
 ├── packages/
-│   ├── contracts/                 Shared report & receipt schemas
-│   ├── engine/                    Scan orchestration & workspace context
-│   ├── fraud-scan/                Cues, brand DB, indicator extraction
-│   ├── policy/                    Deterministic verdict & action mapping
-│   ├── receipts/                  Canonical JSON, SHA-256, Ed25519
-│   └── repo-scan/                 Secret rules, dependency audit, CI linter
-├── supabase/migrations/           Schema + row-level security
+│   ├── contracts/                    Shared TypeScript schemas (v1)
+│   ├── engine/                       Scan orchestration, threat model scenarios
+│   ├── fraud-scan/                   Social engineering cues, brand DB, indicators
+│   ├── policy/                       Deterministic verdict & action mapping
+│   ├── receipts/                     Canonical JSON, SHA-256, Ed25519 signing
+│   ├── repo-scan/                    Secret rules, dependency audit, CI linter
+│   ├── repo-fetch/                   GitHub tarball download & extraction
+│   └── url-intel/                    RDAP domain age, URLhaus, trained ML model, Suricata
+├── scripts/
+│   └── train_url_model.py            Train logistic URL risk model from labeled CSV
+├── supabase/migrations/              Postgres schema (profiles, reports, sightings, blocklist)
+├── worker.mjs                        Cloudflare Workers entry
+├── wrangler.jsonc                    Workers config
+├── .github/workflows/                CI security gate
 └── tests/policy.test.ts
 ```
 
@@ -160,47 +169,34 @@ signalward/
 
 ## Configuration
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `SIGNALWARD_SESSION_SECRET` | production | Encrypts session cookies (32+ bytes, base64) |
-| `SIGNALWARD_INDICATOR_KEY` | production | 32-byte HKDF master for per-account indicator tags |
-| `SIGNALWARD_INDICATOR_KEY_VERSION` | optional | Active indicator-key version (defaults to `k1`) |
-| `SIGNALWARD_PREVIOUS_INDICATOR_KEYS` | optional | Secret key history used to preserve indicator matches during rotations; maximum three previous keys |
-| `SIGNALWARD_SIGNING_KEY` | production | Base64 PKCS#8 DER Ed25519 receipt key |
-| `SIGNALWARD_REPORT_ENCRYPTION_KEY` | production | Exactly 32 random bytes, base64; encrypts stored report payloads with AES-256-GCM |
-| `SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS` | optional | Secret history of up to three previous report-encryption keys, used during rotation |
-| `SIGNALWARD_PREVIOUS_SIGNING_KEYS` | optional | Base64url JSON public-key history retained for receipt verification after key rotation |
-| `PUBLIC_URL` | production | Origin for auth redirects and secure cookies |
-| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | for Supabase | Auth + database (anon key only, never service-role) |
-| `GEMINI_API_KEY`, `GEMINI_MODEL` | optional | Plain-language report summaries; falls back to rules |
-| `PORT`, `HOST`, `AUTH_PROVIDER`, `ALLOW_SIGNUP` | optional | Server and auth behaviour |
+Copy `.env.example` to `.env`, then run `signalward keys` to generate secrets.
 
-Run `node apps/cli/signalward.ts doctor` to check everything at once.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3000` | Server port (auto-selects if busy) |
+| `PUBLIC_URL` | `http://127.0.0.1:3000` | Origin for cookies and auth redirects |
+| `SIGNALWARD_SESSION_SECRET` | auto | 32-byte session cookie encryption key |
+| `SIGNALWARD_INDICATOR_KEY` | auto | 32-byte HKDF master for indicator tags |
+| `SIGNALWARD_SIGNING_KEY` | auto | Ed25519 PKCS#8 key for receipt signing |
+| `SIGNALWARD_REPORT_ENCRYPTION_KEY` | auto | 32-byte AES-256-GCM key for stored reports |
+| `SUPABASE_URL` | — | Supabase project URL (enables persistent storage) |
+| `SUPABASE_ANON_KEY` | — | Supabase anon/publishable key |
+| `AUTH_PROVIDER` | `auto` | `supabase`, `local`, or `auto` |
+| `GEMINI_API_KEY` | — | Optional; enables AI report briefs |
+| `URLHAUS_AUTH_KEY` | — | Optional; enables live host reputation lookups |
+| `SIGNALWARD_URL_MODEL_B64` | — | Optional; base64url-encoded trained URL risk model |
 
-Rotate the receipt signing key with `node apps/cli/signalward.ts keys rotate`. Deploy both values it prints: the replacement private key and the previous public-key history. The public key endpoint and offline key exports include the active key plus retained previous keys, so older receipts continue to verify. Keep retired public keys for as long as their receipts must remain verifiable; the configured history supports up to 32 retired keys.
-
-Rotate the indicator key with `node apps/cli/signalward.ts keys rotate-indicators`. Deploy all three values it prints together. During overlap, SignalWard reads and records tags under the active key and retained previous keys; this preserves existing sightings and blocklist matches. Previous indicator keys are secrets. Removing one ends matching for tags created with that version, so retain it until those records are deliberately retired.
-
-Stored report payloads and local-account/workspace records use AES-256-GCM. Local account and workspace encryption derive separate keys from the report key with HKDF and distinct contexts. Back up `SIGNALWARD_REPORT_ENCRYPTION_KEY` securely; reports or local records encrypted with lost active and retained keys cannot be recovered. Rotate with `node apps/cli/signalward.ts keys rotate-reports` and deploy both values it prints. Local reports, account records and workspace data are re-encrypted under the active key on startup; Supabase reports are re-encrypted with the active key when opened or exported. Keep prior keys until all reports/local records encrypted with them have been re-encrypted or deleted. New Supabase reports are encrypted at the application layer. Previously stored Supabase rows remain marked as legacy plaintext until opened or exported through the app's one-way encryption migration.
-
----
-
-## Supabase setup
-
-1. Create a project and copy its URL and anon key into `.env`.
-2. Run every SQL file in `supabase/migrations/` in timestamp order. This creates `profiles`, `reports`, `indicator_sightings` and `blocklist`, enables row-level security, and adds report encryption and key-rotation support.
-3. Enable the **GitHub** and **Google** auth providers, and add `<PUBLIC_URL>/auth/callback` to the redirect URLs.
-4. Run `node apps/cli/signalward.ts doctor` to confirm the tables exist.
+Key rotation commands (`keys rotate`, `rotate-indicators`, `rotate-reports`) produce the `SIGNALWARD_PREVIOUS_*` variables needed for zero-downtime rollover.
 
 ---
 
 ## Security Properties
 
-- **Deterministic verdicts** — policy is pure code, no model or probability involved
+- **Deterministic verdicts** — pure code policy, no model can alter a verdict
 - **Zero-fetch URL analysis** — untrusted links are never opened
-- **Privacy-preserving indicators** — raw values are redacted; only keyed HMAC tags are stored
-- **Tenant isolation** — per-account HKDF keys and Postgres row-level security
-- **Non-repudiable receipts** — Ed25519 signatures over Canonical JSON, verifiable offline
-- **Hardened sessions** — AES-256-GCM encrypted HttpOnly cookies, same-origin checks, rate limits
-- **Strict CSP** — no inline scripts; all assets self-hosted
-- **Safe file intake** — path traversal blocked, symlinks refused, binary files skipped
+- **Privacy-preserving indicators** — raw values redacted; only keyed HMAC tags stored
+- **Non-repudiable receipts** — Ed25519 over Canonical JSON, verifiable offline or in-browser
+- **Report encryption at rest** — AES-256-GCM with key rotation support
+- **CSRF protection** — `Sec-Fetch-Site` + `Origin` validation on every mutation
+- **Memory-safe file intake** — path traversal blocked, symlinks refused, binaries skipped
+- **Structured threat model** — deterministic scenario assessment attached to every report

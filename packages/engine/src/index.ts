@@ -6,6 +6,8 @@ import { finding } from "../../fraud-scan/src/rules.ts";
 import { POLICY_VERSION, actionsFor, evaluateFraudScan, evaluateRepositoryScan, type RepositoryFinding } from "../../policy/src/index.ts";
 import { scanFiles, type SourceFile } from "../../repo-scan/src/index.ts";
 import { buildThreatAssessment } from "./threat-model.ts";
+import { scoreUrlRiskModel, type UrlRiskModel } from "../../url-intel/src/model.ts";
+import type { UrlHausHostResult } from "../../url-intel/src/index.ts";
 
 /** Everything a scan may know about the caller's workspace. Scanners never see other workspaces. */
 export type WorkspaceContext = {
@@ -179,7 +181,11 @@ export class ScanInputError extends Error {
   }
 }
 
-export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options: { domainAge?: (domain: string) => Promise<Finding | null> } = {}): Promise<Report> {
+export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options: {
+  domainAge?: (domain: string) => Promise<Finding | null>;
+  urlhaus?: (host: string) => Promise<UrlHausHostResult>;
+  urlRiskModel?: UrlRiskModel | null;
+} = {}): Promise<Report> {
   const timer = new Timer();
   const normalized = normalizeTarget(rawUrl);
   if (!normalized.ok) throw new ScanInputError(normalized.code, normalized.message);
@@ -193,24 +199,39 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options:
   const protectedIndicators = await protectIndicators(raw, ctx);
   timer.mark("correlate");
   const findings = [...lexical, ...protectedIndicators.findings];
+  const modelScore = options.urlRiskModel ? scoreUrlRiskModel(options.urlRiskModel, u) : null;
+  if (modelScore?.finding) findings.push(modelScore.finding);
   // Optional passive domain intelligence: query the domain's registration age, never the page itself.
-  let domainAgeRan = false;
-  if (options.domainAge && u.registrableDomain && !u.isIp) {
-    const aged = await options.domainAge(u.registrableDomain).catch(() => null);
-    domainAgeRan = true;
-    if (aged) findings.push(aged);
-    timer.mark("intel");
-  }
+  const ageCheck = options.domainAge && u.registrableDomain && !u.isIp
+    ? Promise.resolve().then(() => options.domainAge!(u.registrableDomain!)).catch(() => null)
+    : null;
+  const urlhausCheck = options.urlhaus
+    ? Promise.resolve().then(() => options.urlhaus!(u.hostname)).catch(() => ({ status: "unavailable" as const, detail: "URLhaus lookup failed unexpectedly." }))
+    : null;
+  const [ageFinding, urlhausResult] = await Promise.all([
+    ageCheck ?? Promise.resolve(null),
+    urlhausCheck ?? Promise.resolve(null),
+  ]);
+  const domainAgeRan = ageCheck !== null;
+  if (ageFinding) findings.push(ageFinding);
+  if (urlhausResult?.finding) findings.push(urlhausResult.finding);
+  if (ageCheck || urlhausCheck) timer.mark("intel");
   const coverage: DetectorCoverage[] = [
     { detector: "url_normalization", status: "ran", detail: "Refanged, credentials stripped, IDN decoded.", required: true },
     { detector: "link_lexical", status: "ran", detail: "Brand, homograph, redirect, shortener and hosting rules.", required: true },
     { detector: "workspace_correlation", status: "ran", detail: "Tags matched against this workspace's history and blocklist.", required: true },
-    { detector: "domain_age", status: domainAgeRan ? "ran" : "skipped", detail: domainAgeRan ? "Registration age checked via RDAP; the link itself is never opened." : "Passive domain-age intelligence is off on this server.", required: false },
-    { detector: "threat_intelligence", status: "skipped", detail: "No live URL-reputation provider is configured, so this destination cannot be confirmed safe against current threat feeds.", required: true },
+    { detector: "url_model", status: modelScore ? "ran" : "skipped", detail: modelScore
+      ? `Model ${options.urlRiskModel!.modelVersion} (${options.urlRiskModel!.datasetId}) returned a structural score of ${Math.round(modelScore.score * 100)}/100; review threshold ${Math.round(modelScore.threshold * 100)}/100.`
+      : "No trained URL model is configured. Unmatched links cannot be evaluated by ML.", required: true },
+    { detector: "urlhaus_host_intel", status: urlhausResult?.status === "checked" ? "ran" : urlhausResult ? "partial" : "skipped",
+      detail: urlhausResult?.detail ?? "URLhaus Auth-Key is not configured; no live threat-intelligence lookup ran.", required: true },
+    { detector: "domain_age", status: domainAgeRan ? "ran" : "skipped", detail: domainAgeRan
+      ? `RDAP lookup attempted for ${u.registrableDomain}; ${ageFinding ? "a recent registration signal was found." : "no recent registration finding was returned."}`
+      : "Passive domain-age intelligence is off on this server.", required: false },
     { detector: "page_inspection", status: "skipped", detail: "TLS, redirects and page content are not inspected. SignalWard does not open submitted links.", required: false },
   ];
-  // A clean lexical result is not a clean bill of health. With no live reputation
-  // provider configured, unresolved URLs must stay unverified instead of low risk.
+  // A clean lexical result is not a clean bill of health. Both the trained model and
+  // live reputation lookup must run before the policy may return low_risk.
   const complete = coverage.every((item) => !item.required || item.status === "ran");
   const verdict = evaluateFraudScan(findings, complete ? "complete" : "incomplete");
   timer.mark("policy");
@@ -232,7 +253,7 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options:
     mitigations: mitigations("url", verdict),
     stages: timer.stages,
     summary: verdict === "inconclusive"
-      ? "Inconclusive: local link checks ran, but no live reputation source confirmed this destination. Treat it as unverified."
+      ? "Inconclusive: required URL model or live threat-intelligence checks are missing or unavailable. Treat this destination as unverified."
       : FRAUD_SUMMARY[verdict] ?? verdict,
   };
 }

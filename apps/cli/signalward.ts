@@ -12,6 +12,7 @@
  */
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { watch as watchFs, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Report } from "../../packages/contracts/src/index.ts";
@@ -19,7 +20,9 @@ import { ScanInputError, memoryContext, primaryAction, runRepositoryScan, runUrl
 import { issueReceipt, loadSigningKey, parseTrustedKeyHistory, trustedKeySet, verifyReceipt, type TrustedKey } from "../../packages/receipts/src/index.ts";
 import { isIgnoredPath, readDirectory } from "../../packages/repo-scan/src/index.ts";
 import { fetchRepository } from "../../packages/repo-fetch/src/index.ts";
-import { domainAgeFinding } from "../../packages/url-intel/src/index.ts";
+import { domainAgeFinding, urlHausHostFinding } from "../../packages/url-intel/src/index.ts";
+import { parseUrlRiskModelB64 } from "../../packages/url-intel/src/model.ts";
+import { suricataAlertFinding } from "../../packages/url-intel/src/suricata.ts";
 import { ConfigError, loadEnvFile, readConfig } from "../web/src/env.ts";
 import { parseIndicatorKeyHistory, parseReportEncryptionKeyHistory, resolveSecret } from "../web/src/security.ts";
 
@@ -27,6 +30,8 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const env = loadEnvFile(join(root, ".env"));
 const stateDir = env.SIGNALWARD_STATE_DIR || join(root, ".signalward");
 const urlIntel = env.URL_INTEL !== "off";
+const urlHausAuthKey = env.URLHAUS_AUTH_KEY?.trim() || null;
+const urlRiskModel = parseUrlRiskModelB64(env.SIGNALWARD_URL_MODEL_B64);
 const args = process.argv.slice(2);
 const command = args[0];
 const flag = (name: string) => {
@@ -191,7 +196,11 @@ function mcpServe(): Promise<number> {
   async function callTool(name: string, input: Record<string, unknown>): Promise<string> {
     const ctx = memoryContext("mcp", randomBytes(32));
     if (name === "scan_url") {
-      return summarise(await runUrlScan(String(input.url ?? ""), ctx, urlIntel ? { domainAge: (domain) => domainAgeFinding(domain) } : {}));
+      return summarise(await runUrlScan(String(input.url ?? ""), ctx, {
+        ...(urlIntel ? { domainAge: (domain: string) => domainAgeFinding(domain) } : {}),
+        ...(urlHausAuthKey ? { urlhaus: (host: string) => urlHausHostFinding(host, urlHausAuthKey) } : {}),
+        urlRiskModel,
+      }));
     }
     if (name === "scan_repository") {
       const fetched = await fetchRepository(String(input.url ?? ""), { ...(input.ref ? { ref: String(input.ref) } : {}), ...(input.token ? { token: String(input.token) } : {}) });
@@ -245,6 +254,33 @@ function mcpServe(): Promise<number> {
 }
 
 async function main(): Promise<number> {
+  if (command === "suricata") {
+    if (!has("--stdin")) throw new Error("Use `signalward suricata --stdin` and pipe real Suricata eve.json lines into it.");
+    const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+    let malformed = 0;
+    for await (const line of input) {
+      if (!line.trim()) continue;
+      if (Buffer.byteLength(line, "utf8") > 1_000_000) {
+        malformed++;
+        continue;
+      }
+      try {
+        const event: unknown = JSON.parse(line);
+        const alert = suricataAlertFinding(event);
+        if (!alert) continue;
+        if (has("--json")) console.log(JSON.stringify({ source: "suricata-eve", alert }));
+        else {
+          console.log(`\n${paint(SEVERITY_COLOR[alert.severity] ?? "0", alert.severity.toUpperCase())}  ${alert.title}`);
+          for (const item of alert.evidence) console.log(`  ${item.label}: ${item.value}`);
+          console.log(`  Action: ${alert.remediation}`);
+        }
+      } catch {
+        malformed++;
+      }
+    }
+    if (malformed) console.error(`Ignored ${malformed} oversized or malformed EVE line(s).`);
+    return 0;
+  }
   if (command === "scan") {
     const target = args[1] && !args[1].startsWith("--") ? args[1] : ".";
     const ctx = memoryContext("local_cli", randomBytes(32));
@@ -268,7 +304,11 @@ async function main(): Promise<number> {
   }
   if (command === "url") {
     if (!args[1]) throw new ScanInputError("USAGE", "Pass a link: signalward url <link>");
-    const report = await runUrlScan(args[1], memoryContext("local_cli", randomBytes(32)), urlIntel ? { domainAge: (domain) => domainAgeFinding(domain) } : {});
+    const report = await runUrlScan(args[1], memoryContext("local_cli", randomBytes(32)), {
+      ...(urlIntel ? { domainAge: (domain: string) => domainAgeFinding(domain) } : {}),
+      ...(urlHausAuthKey ? { urlhaus: (host: string) => urlHausHostFinding(host, urlHausAuthKey) } : {}),
+      urlRiskModel,
+    });
     emit(report);
     return report.verdict === "high_risk" ? 1 : report.verdict === "low_risk" ? 0 : 2;
   }
@@ -342,7 +382,7 @@ async function main(): Promise<number> {
     return 0;
   }
   if (command === "doctor") return doctor();
-  console.error("Usage:\n  signalward scan <path|repo-url> [--ref <branch>] [--token <gh>] [--json] [--out <dir>]\n  signalward watch <path>\n  signalward url <link>\n  signalward verify <receipt.json> [--report <report.json>] [--keys <keys.json>]\n  signalward mcp\n  signalward keys [rotate|rotate-indicators|rotate-reports]\n  signalward doctor");
+  console.error("Usage:\n  signalward scan <path|repo-url> [--ref <branch>] [--token <gh>] [--json] [--out <dir>]\n  signalward watch <path>\n  signalward url <link>\n  signalward suricata --stdin [--json]\n  signalward verify <receipt.json> [--report <report.json>] [--keys <keys.json>]\n  signalward mcp\n  signalward keys [rotate|rotate-indicators|rotate-reports]\n  signalward doctor");
   return 2;
 }
 

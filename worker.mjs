@@ -41,6 +41,8 @@ function build(env) {
     previousSigningKeys: config.previousSigningKeys,
     ai: config.ai,
     urlIntel: config.urlIntel,
+    urlHausAuthKey: config.urlHausAuthKey,
+    urlRiskModel: config.urlRiskModel,
     publicUrl: config.publicUrl,
     secureCookies: true,
     allowSignup: config.auth.allowSignup,

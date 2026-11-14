@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseTrustedKeyHistory, type TrustedKey } from "../../../packages/receipts/src/index.ts";
 import { parseIndicatorKeyHistory, parseReportEncryptionKeyHistory, type IndicatorMasterVersion } from "./security.ts";
+import { parseUrlRiskModelB64, type UrlRiskModel } from "../../../packages/url-intel/src/model.ts";
 
 /**
  * Environment loading and strict validation. Every problem is collected and reported together so a
@@ -28,6 +29,8 @@ export type Config = {
   };
   ai: { apiKey: string | null; model: string; timeoutMs: number };
   urlIntel: boolean;
+  urlHausAuthKey: string | null;
+  urlRiskModel: UrlRiskModel | null;
   warnings: string[];
 };
 
@@ -199,6 +202,12 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
 
   const urlIntelRaw = blank(env.URL_INTEL) ?? "on";
   if (!["on", "off"].includes(urlIntelRaw)) problems.push("URL_INTEL must be on or off.");
+  const urlHausAuthKey = blank(env.URLHAUS_AUTH_KEY);
+  const urlModelEncoded = blank(env.SIGNALWARD_URL_MODEL_B64);
+  const urlRiskModel = parseUrlRiskModelB64(urlModelEncoded);
+  if (urlModelEncoded && !urlRiskModel) problems.push("SIGNALWARD_URL_MODEL_B64 is not a valid SignalWard URL model artifact.");
+  if (!urlHausAuthKey) warnings.push("URLHAUS_AUTH_KEY is empty; live URL reputation checks will be unavailable and unmatched URL scans remain inconclusive.");
+  if (!urlRiskModel) warnings.push("SIGNALWARD_URL_MODEL_B64 is empty; ML URL classification is unavailable and unmatched URL scans remain inconclusive.");
 
   if (problems.length) throw new ConfigError(problems);
 
@@ -217,6 +226,8 @@ export function readConfig(env: NodeJS.ProcessEnv, defaults: { stateDir: string 
     auth: { provider, allowSignup: allowSignupRaw === "true", supabase: provider === "supabase" ? supabase : null },
     ai: { apiKey: aiKey, model, timeoutMs },
     urlIntel: urlIntelRaw === "on",
+    urlHausAuthKey,
+    urlRiskModel,
     warnings,
   };
 }

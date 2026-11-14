@@ -62,7 +62,7 @@
           <div class="card-head"><h2 id="url-title">Link</h2><span class="meta">never fetched</span></div>
           <label class="field"><span>Link or domain</span><input name="url" autocomplete="off" spellcheck="false" maxlength="2048" placeholder="hxxps://example[.]com/login"></label>
           <button class="pill pill--dark pill--lg" type="submit">Check link<span class="arrow" aria-hidden="true"></span></button>
-          <p class="fineprint">SignalWard never opens the link. It analyses the text and, when enabled, checks domain registration age.</p>
+          <p class="fineprint">SignalWard never opens the link. It analyses the URL locally; when enabled, RDAP checks registration age, and URLhaus receives only the hostname (never the path or query).</p>
         </form>
 
         <section class="card" data-panel="activity" aria-labelledby="events-title" hidden>

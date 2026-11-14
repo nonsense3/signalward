@@ -36,6 +36,8 @@ const api = createApi({
   previousSigningKeys: config.previousSigningKeys,
   ai: config.ai,
   urlIntel: config.urlIntel,
+  urlHausAuthKey: config.urlHausAuthKey,
+  urlRiskModel: config.urlRiskModel,
   publicUrl: config.publicUrl,
   secureCookies: config.secureCookies,
   allowSignup: config.auth.allowSignup,

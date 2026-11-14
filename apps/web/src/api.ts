@@ -4,7 +4,7 @@ import type { Report } from "../../../packages/contracts/src/index.ts";
 import { ScanInputError, primaryAction, runMessageScan, runRepositoryScan, runUrlScan, type WorkspaceContext } from "../../../packages/engine/src/index.ts";
 import { MESSAGE_LIMIT } from "../../../packages/fraud-scan/src/index.ts";
 import { RepoFetchError, fetchRepository } from "../../../packages/repo-fetch/src/index.ts";
-import { domainAgeFinding } from "../../../packages/url-intel/src/index.ts";
+import { domainAgeFinding, urlHausHostFinding } from "../../../packages/url-intel/src/index.ts";
 import { issueReceipt, trustedKeySet, verifyReceipt, type SigningKey, type TrustedKey } from "../../../packages/receipts/src/index.ts";
 import { briefFor, type AiConfig } from "./ai.ts";
 import { checkPassword, type AuthProvider, type AuthResult, type SessionData, type User } from "./auth.ts";
@@ -31,6 +31,8 @@ export type ApiDeps = {
   allowSignup: boolean;
   /** Enable network-backed URL enrichment (RDAP domain age). Never fetches the link itself. */
   urlIntel: boolean;
+  urlHausAuthKey: string | null;
+  urlRiskModel: import("../../../packages/url-intel/src/model.ts").UrlRiskModel | null;
 };
 
 type Ctx = { rid: string; ip: string; setCookies: string[]; origin: string };
@@ -387,7 +389,14 @@ export function createApi(deps: ApiDeps) {
         broadcast(actor.userId, { type: "scan.started", kind });
         try {
           const domainAge = deps.urlIntel ? (domain: string) => domainAgeFinding(domain, { timeoutMs: deps.ai.timeoutMs }) : undefined;
-          report = await runUrlScan(body.url, ws, domainAge ? { domainAge } : {});
+          const urlhaus = deps.urlHausAuthKey
+            ? (host: string) => urlHausHostFinding(host, deps.urlHausAuthKey!, { timeoutMs: deps.ai.timeoutMs })
+            : undefined;
+          report = await runUrlScan(body.url, ws, {
+            ...(domainAge ? { domainAge } : {}),
+            ...(urlhaus ? { urlhaus } : {}),
+            urlRiskModel: deps.urlRiskModel,
+          });
         } catch (error) {
           if (error instanceof ScanInputError) throw new AppError(422, error.code, error.message, { field: "url" });
           throw error;

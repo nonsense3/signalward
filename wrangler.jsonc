@@ -7,7 +7,9 @@
   // Set these as secrets (dashboard -> Settings -> Variables and Secrets, or `wrangler secret put`):
   //   SUPABASE_URL  SUPABASE_ANON_KEY  PUBLIC_URL
   //   SIGNALWARD_SESSION_SECRET  SIGNALWARD_INDICATOR_KEY  SIGNALWARD_SIGNING_KEY  SIGNALWARD_REPORT_ENCRYPTION_KEY
-  //   optional: GEMINI_API_KEY  SIGNALWARD_PREVIOUS_SIGNING_KEYS  SIGNALWARD_PREVIOUS_INDICATOR_KEYS
+  //   optional: URLHAUS_AUTH_KEY  SIGNALWARD_URL_MODEL_B64  GEMINI_API_KEY
+  //             URL model artifacts are generated from a licensed, labeled CSV with scripts/train_url_model.py.
+  //             SIGNALWARD_PREVIOUS_SIGNING_KEYS  SIGNALWARD_PREVIOUS_INDICATOR_KEYS
   //             SIGNALWARD_PREVIOUS_REPORT_ENCRYPTION_KEYS  SIGNALWARD_INDICATOR_KEY_VERSION
   "name": "signalward",
   "main": "worker.mjs",
