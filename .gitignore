@@ -7,7 +7,6 @@ coverage/
 .env.*
 !.env.example
 
-# Keep incidental Markdown local; publish the README and security design baseline.
+# Only README.md is published; all other Markdown stays local.
 *.md
 !/README.md
-!/THREAT_MODEL.md

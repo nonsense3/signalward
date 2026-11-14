@@ -74,6 +74,22 @@ function indicatorChip(indicator, reportId) {
     indicator.seenBefore ? h("small", { text: `×${indicator.seenBefore + 1}` }) : null, button);
 }
 
+function threatScenarioRow(scenario, findings) {
+  const byId = new Map(findings.map((finding) => [finding.id, finding]));
+  const evidence = scenario.findingIds.map((id) => byId.get(id)?.title).filter(Boolean);
+  const signalTone = scenario.signal === "high" ? "critical" : scenario.signal === "medium" ? "high" : scenario.signal === "low" ? "medium" : "info";
+  return h("details", { class: "finding" },
+    h("summary", {}, h("span", { class: `tag tag--${signalTone}`, text: `${scenario.signal} signal` }),
+      h("span", { class: "title", text: scenario.attackPath }), h("span", { class: "loc", text: `${scenario.impact} impact` })),
+    h("div", { class: "finding__body" },
+      h("p", {}, h("strong", { text: "Threat actor: " }), scenario.actor),
+      h("p", {}, h("strong", { text: "Target asset: " }), scenario.targetAsset),
+      h("p", {}, h("strong", { text: "Preconditions: " }), scenario.preconditions),
+      h("p", {}, h("strong", { text: "Controls in this scan: " }), scenario.controls.join("; ")),
+      h("p", {}, h("strong", { text: "Residual risk: " }), scenario.residualRisk),
+      evidence.length ? h("p", {}, h("strong", { text: "Linked findings: " }), evidence.join("; ")) : null));
+}
+
 function render(stored, { scroll = true } = {}) {
   const { report, receipt, brief } = stored;
   results.set(report.kind, stored);
@@ -105,6 +121,12 @@ function render(stored, { scroll = true } = {}) {
     report.findings.length ? h("section", { class: "card", "aria-labelledby": "findings-title" },
       h("div", { class: "card-head" }, h("h3", { id: "findings-title", text: "Findings" }), h("span", { class: "meta", text: `${report.findings.length} total` })),
       list, moreButton) : null,
+
+    report.threatAssessment ? h("section", { class: "card", "aria-labelledby": "threat-model-title" },
+      h("div", { class: "card-head" }, h("h3", { id: "threat-model-title", text: "Threat model" }), h("span", { class: "meta", text: report.threatAssessment.method.replace(/-/g, " ") })),
+      h("p", { class: "muted", text: report.threatAssessment.scope }),
+      h("div", { class: "findings" }, report.threatAssessment.scenarios.map((scenario) => threatScenarioRow(scenario, report.findings))),
+      report.threatAssessment.coverageLimitations.length ? h("p", { class: "muted", text: `Coverage limits: ${report.threatAssessment.coverageLimitations.join("; ")}` }) : null) : null,
 
     report.indicators.length ? h("section", { class: "card", "aria-labelledby": "ind-title" },
       h("div", { class: "card-head" }, h("h3", { id: "ind-title", text: "Indicators" }), h("span", { class: "meta", text: "private tags" })),

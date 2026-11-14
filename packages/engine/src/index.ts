@@ -5,6 +5,7 @@ import { analyzeMessage, analyzeUrlLexical, indicatorTag, normalizeTarget, type 
 import { finding } from "../../fraud-scan/src/rules.ts";
 import { POLICY_VERSION, actionsFor, evaluateFraudScan, evaluateRepositoryScan, type RepositoryFinding } from "../../policy/src/index.ts";
 import { scanFiles, type SourceFile } from "../../repo-scan/src/index.ts";
+import { buildThreatAssessment } from "./threat-model.ts";
 
 /** Everything a scan may know about the caller's workspace. Scanners never see other workspaces. */
 export type WorkspaceContext = {
@@ -65,6 +66,7 @@ export function runRepositoryScan(files: readonly SourceFile[], label: string, c
     : verdict === "incomplete"
       ? `Incomplete: ${output.skipped} file(s) were skipped, so a pass cannot be confirmed.`
       : `Passed: no blocking credentials in ${output.files} files. ${output.findings.length} advisory finding(s).`;
+  const threatAssessment = buildThreatAssessment({ kind: "repository", verdict, findings: output.findings, coverage: output.coverage });
   return {
     schema: REPORT_SCHEMA,
     id: newReportId(),
@@ -77,6 +79,7 @@ export function runRepositoryScan(files: readonly SourceFile[], label: string, c
     coverage: output.coverage,
     complete,
     findings: output.findings,
+    threatAssessment,
     indicators: [],
     mitigations: mitigations("repository", verdict),
     stages: timer.stages,
@@ -135,6 +138,7 @@ export async function runMessageScan(input: { text: string; sender?: string; sub
   ];
   const verdict = evaluateFraudScan(findings, "complete");
   timer.mark("policy");
+  const threatAssessment = buildThreatAssessment({ kind: "message", verdict, findings, coverage });
   return {
     schema: REPORT_SCHEMA,
     id: newReportId(),
@@ -147,6 +151,7 @@ export async function runMessageScan(input: { text: string; sender?: string; sub
     coverage,
     complete: true,
     findings: sortFindings(findings),
+    threatAssessment,
     indicators: protectedIndicators.indicators,
     mitigations: mitigations("message", verdict),
     stages: timer.stages,
@@ -184,6 +189,7 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext): Promise
   ];
   const verdict = evaluateFraudScan(findings, "complete");
   timer.mark("policy");
+  const threatAssessment = buildThreatAssessment({ kind: "url", verdict, findings, coverage });
   return {
     schema: REPORT_SCHEMA,
     id: newReportId(),
@@ -196,6 +202,7 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext): Promise
     coverage,
     complete: true,
     findings: sortFindings(findings),
+    threatAssessment,
     indicators: protectedIndicators.indicators,
     mitigations: mitigations("url", verdict),
     stages: timer.stages,

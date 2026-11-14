@@ -74,6 +74,28 @@ export type Mitigation = {
   mode: "automatic" | "recommended";
 };
 
+/** Deterministic threat scenario derived from scan findings and detector coverage. */
+export type ThreatScenario = {
+  id: string;
+  actor: string;
+  targetAsset: string;
+  attackPath: string;
+  preconditions: string;
+  controls: string[];
+  residualRisk: string;
+  signal: "none" | "low" | "medium" | "high";
+  impact: "low" | "medium" | "high" | "critical";
+  confidence: Confidence;
+  findingIds: string[];
+};
+
+export type ThreatAssessment = {
+  method: "deterministic-scenarios-v1";
+  scope: string;
+  coverageLimitations: string[];
+  scenarios: ThreatScenario[];
+};
+
 export type Stage = { name: string; ms: number; status: "done" | "skipped" };
 
 export type ReportScope =
@@ -93,6 +115,8 @@ export type Report = {
   coverage: DetectorCoverage[];
   complete: boolean;
   findings: Finding[];
+  /** Structured, evidence-linked threat model. Optional for compatibility with older reports. */
+  threatAssessment?: ThreatAssessment;
   indicators: Indicator[];
   mitigations: Mitigation[];
   stages: Stage[];
