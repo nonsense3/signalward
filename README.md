@@ -100,6 +100,10 @@ node apps/cli/signalward.ts doctor   # validate configuration and connectivity
 
 **Exit codes:** `0` pass/valid · `1` block/high-risk/invalid · `2` incomplete/error
 
+## CI Gate
+
+`.github/workflows/signalward-security.yml` scans every pull request and push with read-only repository permissions. A high-severity secret finding returns a non-zero exit code and fails the check. To make that check prevent merges, require **SignalWard repository security scan** in the repository's branch protection or ruleset settings.
+
 ---
 
 ## API
