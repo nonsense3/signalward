@@ -25,7 +25,7 @@
   <header class="header" data-header>
     <a class="brand" href="/" aria-label="SignalWard home"><span class="brand__mark" aria-hidden="true"></span>SignalWard</a>
     <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch between light and dark theme"></button>
-    <a class="pill pill--dark hide-sm" href="/scan" data-cta data-magnetic>Open console<span class="arrow" aria-hidden="true"></span></a>
+    <a class="pill pill--dark hide-sm" href="/scan" data-cta>Open console<span class="arrow" aria-hidden="true"></span></a>
     <button class="pill menu-btn" type="button" data-menu aria-expanded="false" aria-controls="menu">Menu <span class="dots" aria-hidden="true"><i></i><i></i></span></button>
   </header>
 
@@ -41,10 +41,9 @@
         <div class="hero__side" data-reveal>
           <p>Catch leaked credentials and fraud attempts. Keep what you learn private. Sign every decision so anyone can check it.</p>
           <div class="row">
-            <a class="pill pill--dark pill--lg" href="/scan" data-magnetic>Start scanning<span class="arrow" aria-hidden="true"></span></a>
-            <button class="pill pill--line pill--lg" id="sample" type="button">Run a sample</button>
+            <a class="pill pill--dark pill--lg" href="/scan">Start scanning<span class="arrow" aria-hidden="true"></span></a>
+            <a class="pill pill--line pill--lg" href="#detection">How it works</a>
           </div>
-          <div id="sample-result" class="sample" role="status" hidden></div>
         </div>
         <span class="hero__scroll" aria-hidden="true"><i></i></span>
       </div>
@@ -60,41 +59,41 @@
 
     <section class="observatory" aria-label="Capabilities">
       <div class="observatory__dock" data-frame="dock" aria-hidden="true">
-        <span class="dock__label mono" data-hud="label">01 · Detection</span>
+        <span class="dock__label mono" data-hud="label">Detection</span>
       </div>
       <div class="observatory__chapters">
-        <article class="chapter" id="detection" data-shape="1" data-label="01 · Detection">
-          <span class="chapter__no">01</span>
+        <article class="chapter" id="detection" data-shape="1" data-label="Detection">
+          <p class="chapter__kicker">Real-time detection</p>
           <h2>Catch the credential at the commit.</h2>
           <p>Twelve credential formats, entropy checks, pinned advisories and CI rules. Matches are redacted before they leave the scanner.</p>
           <ul class="chips"><li class="chip">secrets</li><li class="chip">dependencies</li><li class="chip">pipelines</li></ul>
         </article>
-        <article class="chapter" id="zero-trust" data-shape="2" data-label="02 · Zero trust">
-          <span class="chapter__no">02</span>
+        <article class="chapter" id="zero-trust" data-shape="2" data-label="Zero trust">
+          <p class="chapter__kicker">Zero-trust architecture</p>
           <h2>Every request proves itself.</h2>
           <p>Encrypted, short-lived sessions. Row-level security on every table. Same-origin checks and rate limits on every call.</p>
           <ul class="chips"><li class="chip">AES-256-GCM cookies</li><li class="chip">Postgres RLS</li><li class="chip">strict CSP</li></ul>
         </article>
-        <article class="chapter" id="privacy" data-shape="3" data-label="03 · Privacy">
-          <span class="chapter__no">03</span>
+        <article class="chapter" id="privacy" data-shape="3" data-label="Privacy">
+          <p class="chapter__kicker">Privacy-preserving</p>
           <h2>Correlate without keeping.</h2>
           <p>Phone numbers, UPI IDs, IBANs and wallets become per-account HMAC tags. The raw values are discarded.</p>
           <ul class="chips"><li class="chip">HMAC-SHA-256</li><li class="chip">HKDF per account</li><li class="chip">redacted display</li></ul>
         </article>
-        <article class="chapter" id="identity" data-shape="4" data-label="04 · Identity">
-          <span class="chapter__no">04</span>
+        <article class="chapter" id="identity" data-shape="4" data-label="Identity">
+          <p class="chapter__kicker">Identity &amp; auth</p>
           <h2>Check who a message claims to be.</h2>
           <p>Claimed brands are matched against the domains they really operate. Homographs and lookalikes are caught before anyone clicks.</p>
           <ul class="chips"><li class="chip">31 brands</li><li class="chip">homographs</li><li class="chip">typosquats</li></ul>
         </article>
-        <article class="chapter" id="fraud" data-shape="5" data-label="05 · Fraud">
-          <span class="chapter__no">05</span>
+        <article class="chapter" id="fraud" data-shape="5" data-label="Fraud">
+          <p class="chapter__kicker">Fraud prevention</p>
           <h2>Spot fraud before you pay.</h2>
           <p>High-risk results show their evidence. High-confidence URL, domain and IP indicators cited by findings are added to the workspace blocklist and flagged on reuse.</p>
           <ul class="chips"><li class="chip">evidence warning</li><li class="chip">automatic indicator block</li><li class="chip">reuse detection</li></ul>
         </article>
-        <article class="chapter" id="evidence" data-shape="6" data-label="06 · Evidence">
-          <span class="chapter__no">06</span>
+        <article class="chapter" id="evidence" data-shape="6" data-label="Evidence">
+          <p class="chapter__kicker">Verifiable evidence</p>
           <h2>Every verdict ships with a receipt.</h2>
           <p>Reports are canonicalised, hashed and signed with Ed25519. Change one field and verification fails.</p>
           <a class="pill pill--dark" href="/verify">Open the verifier<span class="arrow" aria-hidden="true"></span></a>
@@ -102,10 +101,51 @@
       </div>
     </section>
 
+    <section class="featured" aria-labelledby="featured-title">
+      <div class="featured__head">
+        <h2 class="display" id="featured-title" data-reveal>Featured<br>capabilities</h2>
+        <p class="featured__note" data-reveal>Focused scanners for teams who need evidence, not guesses. Each one ends in a signed, verifiable receipt.</p>
+      </div>
+      <div class="featured__list">
+        <a class="work" href="/scan#repository" data-reveal>
+          <div class="work__media work__media--repo" aria-hidden="true"></div>
+          <div class="work__body">
+            <p class="work__meta">Secrets • Dependencies • CI • Policy</p>
+            <h3 class="work__title">Repository scanning<span class="work__arrow" aria-hidden="true">→</span></h3>
+            <p class="work__desc">Point it at a Git repository URL. It audits the snapshot for leaked secrets, vulnerable dependencies and risky pipelines, then signs the result.</p>
+          </div>
+        </a>
+        <a class="work" href="/scan#message" data-reveal>
+          <div class="work__media work__media--msg" aria-hidden="true"></div>
+          <div class="work__body">
+            <p class="work__meta">Phishing • Impersonation • Indicators • Privacy</p>
+            <h3 class="work__title">Fraud review<span class="work__arrow" aria-hidden="true">→</span></h3>
+            <p class="work__desc">Paste a suspicious message. It reads social-engineering cues, checks brand claims against real domains, and turns indicators into private tags.</p>
+          </div>
+        </a>
+        <a class="work" href="/scan#url" data-reveal>
+          <div class="work__media work__media--url" aria-hidden="true"></div>
+          <div class="work__body">
+            <p class="work__meta">Homoglyphs • Redirects • Typosquats • Domain age</p>
+            <h3 class="work__title">Link inspection<span class="work__arrow" aria-hidden="true">→</span></h3>
+            <p class="work__desc">Inspect a link without opening it. Lexical analysis catches lookalikes and redirects; optional domain-age intelligence flags freshly registered names.</p>
+          </div>
+        </a>
+        <a class="work" href="/verify" data-reveal>
+          <div class="work__media work__media--verify" aria-hidden="true"></div>
+          <div class="work__body">
+            <p class="work__meta">Ed25519 • SHA-256 • Canonical JSON • Offline</p>
+            <h3 class="work__title">Evidence verifier<span class="work__arrow" aria-hidden="true">→</span></h3>
+            <p class="work__desc">Recompute the digest and check the signature of any receipt in the browser. Change one field in the report and verification fails.</p>
+          </div>
+        </a>
+      </div>
+    </section>
+
     <section class="pipeline" aria-labelledby="pipeline-title">
       <div class="section-head" data-reveal>
         <span class="eyebrow">Pipeline</span>
-        <h2 id="pipeline-title">Six steps, one signed answer.</h2>
+        <h2 id="pipeline-title">Intake to signed answer.</h2>
       </div>
       <ol class="pipeline__steps">
         <li data-reveal><b>Intake</b><span>Bounded snapshot</span></li>
@@ -155,8 +195,8 @@
         <a href="/scan">Console</a><a href="/account">Profile</a><a href="/verify">Verifier</a><a href="/.well-known/signalward-keys.json" data-no-transition>Trusted keys</a>
       </nav>
     </div>
-    <p class="footer__word" aria-hidden="true">SignalWard</p>
-    <div class="footer__base mono"><span>Type: Hubot Sans, Mona Sans, Monaspace Neon (SIL OFL)</span><span>Local preview</span></div>
+    <div class="footer__word" data-logo aria-hidden="true"><canvas></canvas></div>
+    <div class="footer__base mono"><span>Type: Hubot Sans, Mona Sans, Monaspace Neon (SIL OFL)</span><span data-env-badge>SignalWard</span></div>
   </footer>
 </body>
 </html>

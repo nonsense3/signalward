@@ -154,7 +154,38 @@ export function createApi(deps: ApiDeps) {
 
     if (method !== "GET" && !sameOrigin(request)) throw forbidden("Cross-site requests are refused.", "CROSS_ORIGIN");
 
-    if (path === "/api/health" && method === "GET") return ok({ ok: true, auth: deps.auth.kind, signup: deps.allowSignup, recovery: deps.auth.supportsRecovery });
+    if (path === "/api/health" && method === "GET") {
+      return ok({ ok: true, auth: deps.auth.kind, signup: deps.allowSignup, recovery: deps.auth.supportsRecovery, magicLink: deps.auth.supportsMagicLink, oauth: deps.auth.oauthProviders });
+    }
+
+    if (path.startsWith("/api/auth/oauth/") && method === "GET") {
+      const provider = path.slice("/api/auth/oauth/".length);
+      if (!/^[a-z]{2,20}$/.test(provider)) throw notFound("Unknown sign-in provider.");
+      const params = new URL(request.url ?? path, ctx.origin).searchParams;
+      const codeChallenge = params.get("code_challenge") ?? "";
+      if (!/^[A-Za-z0-9_-]{43}$/.test(codeChallenge)) {
+        throw badRequest("AUTH_PKCE_REQUIRED", "Restart sign-in from this browser to protect the OAuth flow.");
+      }
+      const url = deps.auth.oauthUrl(provider, redirectTo(ctx, "/auth/callback"), codeChallenge);
+      if (!url) throw new AppError(501, "AUTH_OAUTH_UNAVAILABLE", "That sign-in method is not available on this server.");
+      const take = limits.signIn.take(ctx.ip);
+      if (!take.ok) throw rateLimited(take.retryAfter);
+      // Top-level redirect to the provider's hosted consent screen; tokens return to /auth/callback.
+      response.writeHead(303, { ...SECURITY_HEADERS, "Cache-Control": "no-store", "X-Request-Id": ctx.rid, Location: url });
+      response.end();
+      return;
+    }
+
+    if (path === "/api/auth/magic-link" && method === "POST") {
+      const take = limits.recover.take(ctx.ip);
+      if (!take.ok) throw rateLimited(take.retryAfter, "Too many sign-in-link requests. Try again later.");
+      const body = validate<{ email: string; codeChallenge: string }>(await readJson(request, 2048), {
+        email: { type: "string", required: true, max: 254, pattern: EMAIL, label: "Email" },
+        codeChallenge: { type: "string", required: true, pattern: /^[A-Za-z0-9_-]{43}$/, label: "PKCE challenge" },
+      });
+      await deps.auth.magicLink(body.email.toLowerCase(), redirectTo(ctx, "/auth/callback"), body.codeChallenge);
+      return ok({ status: "sent" }, 202); // Same answer whether or not the account exists.
+    }
 
     /* --- auth --- */
     if (path === "/api/auth/signup" && method === "POST") {
@@ -194,7 +225,16 @@ export function createApi(deps: ApiDeps) {
 
     if (path === "/api/auth/callback" && method === "POST") {
       if (deps.auth.kind !== "supabase") throw notFound();
-      const body = validate<{ accessToken: string; refreshToken: string; expiresAt: number }>(await readJson(request, 8192), {
+      const raw = await readJson(request, 8192);
+      if (typeof raw.code === "string") {
+        const body = validate<{ code: string; codeVerifier: string }>(raw, {
+          code: { type: "string", required: true, min: 1, max: 2048 },
+          codeVerifier: { type: "string", required: true, pattern: /^[A-Za-z0-9._~-]{43,128}$/ },
+        });
+        issueSession(ctx, await deps.auth.exchangeCode(body.code, body.codeVerifier));
+        return ok({ status: "signed_in" });
+      }
+      const body = validate<{ accessToken: string; refreshToken: string; expiresAt: number }>(raw, {
         accessToken: { type: "string", required: true, max: 4096 },
         refreshToken: { type: "string", required: true, max: 512 },
         expiresAt: { type: "number", min: 0 },
