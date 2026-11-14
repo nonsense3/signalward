@@ -179,7 +179,7 @@ export class ScanInputError extends Error {
   }
 }
 
-export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext): Promise<Report> {
+export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext, options: { domainAge?: (domain: string) => Promise<Finding | null> } = {}): Promise<Report> {
   const timer = new Timer();
   const normalized = normalizeTarget(rawUrl);
   if (!normalized.ok) throw new ScanInputError(normalized.code, normalized.message);
@@ -193,11 +193,20 @@ export async function runUrlScan(rawUrl: string, ctx: WorkspaceContext): Promise
   const protectedIndicators = await protectIndicators(raw, ctx);
   timer.mark("correlate");
   const findings = [...lexical, ...protectedIndicators.findings];
+  // Optional passive domain intelligence: query the domain's registration age, never the page itself.
+  let domainAgeRan = false;
+  if (options.domainAge && u.registrableDomain && !u.isIp) {
+    const aged = await options.domainAge(u.registrableDomain).catch(() => null);
+    domainAgeRan = true;
+    if (aged) findings.push(aged);
+    timer.mark("intel");
+  }
   const coverage: DetectorCoverage[] = [
     { detector: "url_normalization", status: "ran", detail: "Refanged, credentials stripped, IDN decoded.", required: true },
     { detector: "link_lexical", status: "ran", detail: "Brand, homograph, redirect, shortener and hosting rules.", required: true },
     { detector: "workspace_correlation", status: "ran", detail: "Tags matched against this workspace's history and blocklist.", required: true },
-    { detector: "network_inspection", status: "skipped", detail: "DNS, TLS and page inspection are not run in the local preview. SignalWard never opens the link.", required: false },
+    { detector: "domain_age", status: domainAgeRan ? "ran" : "skipped", detail: domainAgeRan ? "Registration age checked via RDAP; the link itself is never opened." : "Passive domain-age intelligence is off on this server.", required: false },
+    { detector: "page_inspection", status: "skipped", detail: "TLS and page content are never inspected. SignalWard does not open the link.", required: false },
   ];
   const verdict = evaluateFraudScan(findings, "complete");
   timer.mark("policy");

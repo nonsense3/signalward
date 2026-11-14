@@ -14,28 +14,6 @@ const dockLabel = $('[data-hud="label"]');
 const chapters = $$(".chapter");
 const hud = { count: $('[data-hud="count"]'), frame: $('[data-hud="frame"]') };
 
-/* ---------- Sample scan (works without WebGL or an account) ---------- */
-const sampleButton = $("#sample");
-const sampleResult = $("#sample-result");
-sampleButton.addEventListener("click", async () => {
-  sampleButton.disabled = true;
-  sampleResult.hidden = false;
-  sampleResult.replaceChildren(h("div", { class: "skeleton", css: { height: "3.2rem" } }));
-  try {
-    const report = await api("/api/sample-scan", { method: "POST", body: {} });
-    const verdict = VERDICT[report.result] ?? { label: report.result, tone: "info" };
-    sampleResult.replaceChildren(
-      h("div", { class: "sample__head" }, h("b", { text: `${report.findings} findings in a synthetic repo` }), h("span", { class: `tag tag--${verdict.tone}`, text: verdict.label })),
-      h("code", { text: `${report.finding.location} · ${report.finding.evidence}` }),
-      h("a", { href: "/scan#repository", text: "Open the full report →" }));
-  } catch (error) {
-    sampleResult.hidden = true;
-    reportError(error);
-  } finally {
-    sampleButton.disabled = false;
-  }
-});
-
 /* ---------- CTA ---------- */
 $("#cta-form").addEventListener("submit", (event) => {
   event.preventDefault();

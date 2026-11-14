@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "signalward": {
+      "command": "node",
+      "args": ["apps/cli/signalward.ts", "mcp"],
+      "cwd": "/absolute/path/to/signalward",
+      "env": {
+        "URL_INTEL": "on"
+      }
+    }
+  }
+}

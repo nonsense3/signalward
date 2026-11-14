@@ -18,12 +18,15 @@ import type { Report } from "../../packages/contracts/src/index.ts";
 import { ScanInputError, memoryContext, primaryAction, runRepositoryScan, runUrlScan } from "../../packages/engine/src/index.ts";
 import { issueReceipt, loadSigningKey, parseTrustedKeyHistory, trustedKeySet, verifyReceipt, type TrustedKey } from "../../packages/receipts/src/index.ts";
 import { isIgnoredPath, readDirectory } from "../../packages/repo-scan/src/index.ts";
+import { fetchRepository } from "../../packages/repo-fetch/src/index.ts";
+import { domainAgeFinding } from "../../packages/url-intel/src/index.ts";
 import { ConfigError, loadEnvFile, readConfig } from "../web/src/env.ts";
 import { parseIndicatorKeyHistory, parseReportEncryptionKeyHistory, resolveSecret } from "../web/src/security.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const env = loadEnvFile(join(root, ".env"));
 const stateDir = env.SIGNALWARD_STATE_DIR || join(root, ".signalward");
+const urlIntel = env.URL_INTEL !== "off";
 const args = process.argv.slice(2);
 const command = args[0];
 const flag = (name: string) => {
@@ -161,13 +164,101 @@ async function watchRepository(rootDir: string): Promise<number> {
   });
 }
 
+/**
+ * Minimal Model Context Protocol server over stdio (newline-delimited JSON-RPC 2.0). It exposes the
+ * same scanners to an MCP-capable terminal or agent. Protocol messages go to stdout; logs to stderr.
+ */
+function mcpServe(): Promise<number> {
+  const key = signingKey();
+  const send = (message: unknown) => process.stdout.write(`${JSON.stringify(message)}\n`);
+  const note = (text: string) => process.stderr.write(`[signalward-mcp] ${text}\n`);
+  const tools = [
+    { name: "scan_url", description: "Analyse a link or domain without opening it. Returns a signed verdict.", inputSchema: { type: "object", properties: { url: { type: "string", description: "Link or domain to inspect." } }, required: ["url"] } },
+    { name: "scan_repository", description: "Scan a Git repository by URL for secrets, vulnerable dependencies and risky CI.", inputSchema: { type: "object", properties: { url: { type: "string", description: "github.com/owner/repo or a full URL." }, ref: { type: "string", description: "Branch or tag (optional)." }, token: { type: "string", description: "GitHub token for a private repo (optional)." } }, required: ["url"] } },
+    { name: "verify_receipt", description: "Verify a SignalWard receipt against the trusted key set.", inputSchema: { type: "object", properties: { receipt: { type: "object" }, report: { type: "object" } }, required: ["receipt"] } },
+  ];
+
+  function summarise(report: Report): string {
+    const receipt = issueReceipt(report, primaryAction(report), key);
+    return JSON.stringify({
+      id: report.id, kind: report.kind, verdict: report.verdict, summary: report.summary,
+      findings: report.findings.map((item) => ({ severity: item.severity, ruleId: item.ruleId, title: item.title, location: item.location ?? null })),
+      indicators: report.indicators.map((item) => ({ type: item.type, display: item.display })),
+      receipt: { digest: receipt.payload.reportDigest, keyId: receipt.payload.keyId, signature: receipt.signature },
+    }, null, 2);
+  }
+
+  async function callTool(name: string, input: Record<string, unknown>): Promise<string> {
+    const ctx = memoryContext("mcp", randomBytes(32));
+    if (name === "scan_url") {
+      return summarise(await runUrlScan(String(input.url ?? ""), ctx, urlIntel ? { domainAge: (domain) => domainAgeFinding(domain) } : {}));
+    }
+    if (name === "scan_repository") {
+      const fetched = await fetchRepository(String(input.url ?? ""), { ...(input.ref ? { ref: String(input.ref) } : {}), ...(input.token ? { token: String(input.token) } : {}) });
+      return summarise(runRepositoryScan(fetched.files, fetched.label, ctx));
+    }
+    if (name === "verify_receipt") {
+      return JSON.stringify(verifyReceipt(input.receipt, trustedKeySet(key, previousSigningKeys()).keys, input.report), null, 2);
+    }
+    throw new Error(`Unknown tool: ${name}`);
+  }
+
+  async function handle(message: { id?: unknown; method?: string; params?: Record<string, unknown> }): Promise<void> {
+    const { id, method, params } = message;
+    if (method === "initialize") {
+      return send({ jsonrpc: "2.0", id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "signalward", version: "0.2.0" } } });
+    }
+    if (method === "tools/list") return send({ jsonrpc: "2.0", id, result: { tools } });
+    if (method === "ping") return send({ jsonrpc: "2.0", id, result: {} });
+    if (method === "notifications/initialized" || method?.startsWith("notifications/")) return;
+    if (method === "tools/call") {
+      const name = String(params?.name ?? "");
+      const input = (params?.arguments as Record<string, unknown>) ?? {};
+      try {
+        send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: await callTool(name, input) }] } });
+      } catch (error) {
+        send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], isError: true } });
+      }
+      return;
+    }
+    if (id !== undefined && id !== null) send({ jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } });
+  }
+
+  let buffer = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    buffer += chunk;
+    let index: number;
+    while ((index = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, index).trim();
+      buffer = buffer.slice(index + 1);
+      if (!line) continue;
+      try {
+        void handle(JSON.parse(line));
+      } catch {
+        note("ignored a malformed JSON-RPC line");
+      }
+    }
+  });
+  note(`ready on stdio with ${tools.length} tools (signing key ${key.keyId})`);
+  return new Promise(() => {}); // run until the client closes the pipe
+}
+
 async function main(): Promise<number> {
   if (command === "scan") {
     const target = args[1] && !args[1].startsWith("--") ? args[1] : ".";
-    const rootDir = resolve(target);
-    const { files, skipped } = await readDirectory(rootDir);
-    const report = runRepositoryScan(files, basename(rootDir), memoryContext("local_cli", randomBytes(32)));
-    if (skipped && report.scope.kind === "repository") report.scope.skipped += skipped;
+    const ctx = memoryContext("local_cli", randomBytes(32));
+    let report: Report;
+    if (/^https?:\/\//i.test(target) || /^[\w.-]+\/[\w.-]+$/.test(target)) {
+      const token = flag("--token") ?? env.GITHUB_TOKEN ?? env.SIGNALWARD_GITHUB_TOKEN;
+      const fetched = await fetchRepository(target, { ...(flag("--ref") ? { ref: flag("--ref")! } : {}), ...(token ? { token } : {}) });
+      report = runRepositoryScan(fetched.files, fetched.label, ctx);
+    } else {
+      const rootDir = resolve(target);
+      const { files, skipped } = await readDirectory(rootDir);
+      report = runRepositoryScan(files, basename(rootDir), ctx);
+      if (skipped && report.scope.kind === "repository") report.scope.skipped += skipped;
+    }
     emit(report);
     return report.verdict === "pass" ? 0 : report.verdict === "block" ? 1 : 2;
   }
@@ -177,10 +268,11 @@ async function main(): Promise<number> {
   }
   if (command === "url") {
     if (!args[1]) throw new ScanInputError("USAGE", "Pass a link: signalward url <link>");
-    const report = await runUrlScan(args[1], memoryContext("local_cli", randomBytes(32)));
+    const report = await runUrlScan(args[1], memoryContext("local_cli", randomBytes(32)), urlIntel ? { domainAge: (domain) => domainAgeFinding(domain) } : {});
     emit(report);
     return report.verdict === "high_risk" ? 1 : report.verdict === "low_risk" ? 0 : 2;
   }
+  if (command === "mcp") return mcpServe();
   if (command === "verify") {
     if (!args[1]) throw new ScanInputError("USAGE", "Pass a receipt: signalward verify <receipt.json>");
     const receipt = JSON.parse(readFileSync(args[1], "utf8"));
@@ -250,7 +342,7 @@ async function main(): Promise<number> {
     return 0;
   }
   if (command === "doctor") return doctor();
-  console.error("Usage:\n  signalward scan <path> [--json] [--out <dir>]\n  signalward watch <path>\n  signalward url <link>\n  signalward verify <receipt.json> [--report <report.json>] [--keys <keys.json>]\n  signalward keys [rotate|rotate-indicators|rotate-reports]\n  signalward doctor");
+  console.error("Usage:\n  signalward scan <path|repo-url> [--ref <branch>] [--token <gh>] [--json] [--out <dir>]\n  signalward watch <path>\n  signalward url <link>\n  signalward verify <receipt.json> [--report <report.json>] [--keys <keys.json>]\n  signalward mcp\n  signalward keys [rotate|rotate-indicators|rotate-reports]\n  signalward doctor");
   return 2;
 }
 

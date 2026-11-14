@@ -1,0 +1,27 @@
+{
+  // Cloudflare Workers deployment for SignalWard.
+  //   Local:  npx wrangler dev
+  //   Deploy: npx wrangler deploy
+  //
+  // The Worker requires Supabase (there is no local filesystem on Workers) and the three SignalWard
+  // secrets. Set them with `wrangler secret put <NAME>` (see the Cloudflare section of the README):
+  //   SUPABASE_URL  SUPABASE_ANON_KEY  PUBLIC_URL
+  //   SIGNALWARD_SESSION_SECRET  SIGNALWARD_INDICATOR_KEY  SIGNALWARD_SIGNING_KEY
+  //   GEMINI_API_KEY (optional)  SIGNALWARD_PREVIOUS_SIGNING_KEYS (optional)
+  "name": "signalward",
+  "main": "worker.mjs",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./apps/web/public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "observability": { "enabled": true },
+  "vars": {
+    "URL_INTEL": "on",
+    "GEMINI_MODEL": "gemini-2.5-flash",
+    "ALLOW_SIGNUP": "true",
+    "AUTH_PROVIDER": "supabase"
+  }
+}
