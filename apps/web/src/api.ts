@@ -139,6 +139,11 @@ export function createApi(deps: ApiDeps) {
     for (const listener of listeners.get(userId) ?? []) listener.write(line);
   }
 
+  function closeStreams(userId: string) {
+    for (const listener of listeners.get(userId) ?? []) listener.end();
+    listeners.delete(userId);
+  }
+
   const redirectTo = (ctx: Ctx, path: string) => `${deps.publicUrl ?? ctx.origin}${path}`;
 
   /* ---------- routes ---------- */
@@ -156,7 +161,12 @@ export function createApi(deps: ApiDeps) {
     if (path.startsWith("/api/auth/oauth/") && method === "GET") {
       const provider = path.slice("/api/auth/oauth/".length);
       if (!/^[a-z]{2,20}$/.test(provider)) throw notFound("Unknown sign-in provider.");
-      const url = deps.auth.oauthUrl(provider, redirectTo(ctx, "/auth/callback"));
+      const params = new URL(request.url ?? path, ctx.origin).searchParams;
+      const codeChallenge = params.get("code_challenge") ?? "";
+      if (!/^[A-Za-z0-9_-]{43}$/.test(codeChallenge)) {
+        throw badRequest("AUTH_PKCE_REQUIRED", "Restart sign-in from this browser to protect the OAuth flow.");
+      }
+      const url = deps.auth.oauthUrl(provider, redirectTo(ctx, "/auth/callback"), codeChallenge);
       if (!url) throw new AppError(501, "AUTH_OAUTH_UNAVAILABLE", "That sign-in method is not available on this server.");
       const take = limits.signIn.take(ctx.ip);
       if (!take.ok) throw rateLimited(take.retryAfter);
@@ -169,8 +179,11 @@ export function createApi(deps: ApiDeps) {
     if (path === "/api/auth/magic-link" && method === "POST") {
       const take = limits.recover.take(ctx.ip);
       if (!take.ok) throw rateLimited(take.retryAfter, "Too many sign-in-link requests. Try again later.");
-      const body = validate<{ email: string }>(await readJson(request, 1024), { email: { type: "string", required: true, max: 254, pattern: EMAIL, label: "Email" } });
-      await deps.auth.magicLink(body.email.toLowerCase(), redirectTo(ctx, "/auth/callback"));
+      const body = validate<{ email: string; codeChallenge: string }>(await readJson(request, 2048), {
+        email: { type: "string", required: true, max: 254, pattern: EMAIL, label: "Email" },
+        codeChallenge: { type: "string", required: true, pattern: /^[A-Za-z0-9_-]{43}$/, label: "PKCE challenge" },
+      });
+      await deps.auth.magicLink(body.email.toLowerCase(), redirectTo(ctx, "/auth/callback"), body.codeChallenge);
       return ok({ status: "sent" }, 202); // Same answer whether or not the account exists.
     }
 
@@ -212,7 +225,16 @@ export function createApi(deps: ApiDeps) {
 
     if (path === "/api/auth/callback" && method === "POST") {
       if (deps.auth.kind !== "supabase") throw notFound();
-      const body = validate<{ accessToken: string; refreshToken: string; expiresAt: number }>(await readJson(request, 8192), {
+      const raw = await readJson(request, 8192);
+      if (typeof raw.code === "string") {
+        const body = validate<{ code: string; codeVerifier: string }>(raw, {
+          code: { type: "string", required: true, min: 1, max: 2048 },
+          codeVerifier: { type: "string", required: true, pattern: /^[A-Za-z0-9._~-]{43,128}$/ },
+        });
+        issueSession(ctx, await deps.auth.exchangeCode(body.code, body.codeVerifier));
+        return ok({ status: "signed_in" });
+      }
+      const body = validate<{ accessToken: string; refreshToken: string; expiresAt: number }>(raw, {
         accessToken: { type: "string", required: true, max: 4096 },
         refreshToken: { type: "string", required: true, max: 512 },
         expiresAt: { type: "number", min: 0 },
@@ -235,6 +257,7 @@ export function createApi(deps: ApiDeps) {
     if (path === "/api/auth/signout" && method === "POST") {
       const session = open<SessionData>(deps.cookieKey, readCookie(request, sessionCookie));
       if (session) await deps.auth.signOut(session).catch(() => undefined);
+      if (session) closeStreams(session.uid);
       clearSession(ctx);
       return ok({ status: "signed_out" });
     }
@@ -289,6 +312,7 @@ export function createApi(deps: ApiDeps) {
       if (weak) throw new AppError(422, "AUTH_WEAK_PASSWORD", weak, { field: "newPassword" });
       if (body.currentPassword && body.currentPassword === body.newPassword) throw new AppError(422, "AUTH_SAME_PASSWORD", "Choose a different password.", { field: "newPassword" });
       const result = await deps.auth.updatePassword(session, body.currentPassword ?? "", body.newPassword);
+      closeStreams(user.id);
       if (result.sessionVersion !== undefined) issueSession(ctx, { user, tokens: null, sessionVersion: result.sessionVersion });
       return ok({ status: "updated" });
     }
@@ -476,13 +500,19 @@ export function createApi(deps: ApiDeps) {
       if (set.size >= 6) [...set][0]?.end();
       set.add(response);
       const ping = setInterval(() => response.write(": ping\n\n"), 25_000);
-      // Close at session expiry so a revoked session cannot keep a stream open indefinitely.
-      const close = setTimeout(() => response.end(), Math.min(session.exp * 1000 - Date.now(), 60 * 60_000));
-      request.on("close", () => {
+      const verify = setInterval(() => {
+        void deps.auth.verify(session).catch(() => response.end());
+      }, 25_000);
+      // Refreshable Supabase access tokens and revoked sessions reconnect through normal auth.
+      const tokenExpiry = session.atExp ? session.atExp * 1000 : Number.POSITIVE_INFINITY;
+      const closeAt = Math.min(session.exp * 1000, tokenExpiry, Date.now() + 60 * 60_000);
+      const close = setTimeout(() => response.end(), Math.max(0, closeAt - Date.now()));
+      response.on("close", () => {
         clearInterval(ping);
+        clearInterval(verify);
         clearTimeout(close);
         set.delete(response);
-        if (!set.size) listeners.delete(actor.userId);
+        if (!set.size && listeners.get(actor.userId) === set) listeners.delete(actor.userId);
       });
       return;
     }

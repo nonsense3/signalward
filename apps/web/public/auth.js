@@ -45,9 +45,19 @@ function setMode(mode, { keepNotice = false } = {}) {
   refreshSso();
   $(`form[data-mode="${mode}"] input`)?.focus({ preventScroll: true });
 }
-// Preserve the destination across the OAuth / magic-link round-trip.
-for (const link of $$("[data-sso]")) link.addEventListener("click", () => {
-  try { sessionStorage.setItem("sw-next", next); } catch {}
+// Bind the OAuth response to this browser tab with PKCE.
+for (const link of $$("[data-sso]")) link.addEventListener("click", async (event) => {
+  event.preventDefault();
+  try {
+    const { verifier, challenge } = await createPkce();
+    savePkce(verifier, "oauth");
+    sessionStorage.setItem("sw-next", next);
+    const target = new URL(link.href, location.origin);
+    target.searchParams.set("code_challenge", challenge);
+    location.assign(target);
+  } catch {
+    showNotice("error", "Secure sign-in could not start in this browser. Use your password or try again in a supported browser.");
+  }
 });
 for (const button of $$("[data-go]")) button.addEventListener("click", () => {
   setMode(button.dataset.go);
@@ -104,6 +114,23 @@ function checkEmail(form) {
     return false;
   }
   return true;
+}
+
+function base64Url(bytes) {
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+async function createPkce() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const verifier = base64Url(bytes);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return { verifier, challenge: base64Url(new Uint8Array(digest)) };
+}
+function savePkce(verifier, flow) {
+  sessionStorage.setItem("sw-pkce-verifier", verifier);
+  sessionStorage.setItem("sw-auth-flow", flow);
+}
+function clearPkce() {
+  for (const key of ["sw-pkce-verifier", "sw-auth-flow"]) sessionStorage.removeItem(key);
 }
 
 $("#form-signin").addEventListener("submit", (event) => {
@@ -165,8 +192,10 @@ $("#form-magic").addEventListener("submit", (event) => {
   const form = event.currentTarget;
   if (!checkEmail(form)) return;
   submit(form, async () => {
-    await api("/api/auth/magic-link", { method: "POST", body: { email: form.elements.email.value }, auth: "silent" });
-    try { sessionStorage.setItem("sw-next", next); } catch {}
+    const { verifier, challenge } = await createPkce();
+    savePkce(verifier, "magic");
+    sessionStorage.setItem("sw-next", next);
+    await api("/api/auth/magic-link", { method: "POST", body: { email: form.elements.email.value, codeChallenge: challenge }, auth: "silent" });
     setMode("signin", { keepNotice: true });
     showNotice("success", `Check ${form.elements.email.value} for a one-time sign-in link.`);
   });
@@ -176,16 +205,45 @@ $("#form-magic").addEventListener("submit", (event) => {
 async function handleCallback() {
   setMode("callback");
   for (const form of $$("form[data-mode]")) form.hidden = true;
+  const query = new URLSearchParams(location.search);
   const fragment = new URLSearchParams(location.hash.slice(1));
+  const code = query.get("code");
+  const flow = sessionStorage.getItem("sw-auth-flow");
   history.replaceState(null, "", "/auth/callback"); // drop tokens from the address bar and history
-  if (fragment.get("error")) {
-    const expired = fragment.get("error_code") === "otp_expired";
+  const callbackError = query.get("error") ?? fragment.get("error");
+  if (callbackError) {
+    const expired = query.get("error_code") === "otp_expired" || fragment.get("error_code") === "otp_expired";
+    clearPkce();
     setMode("signin", { keepNotice: true });
-    showNotice("error", expired ? "That link has expired or was already used. Request a new one." : (fragment.get("error_description") ?? "The link could not be used.").slice(0, 200));
+    showNotice("error", expired ? "That link has expired or was already used. Request a new one." : (query.get("error_description") ?? fragment.get("error_description") ?? "The link could not be used.").slice(0, 200));
+    return;
+  }
+  if (code) {
+    const verifier = sessionStorage.getItem("sw-pkce-verifier");
+    clearPkce();
+    if (!verifier || !["oauth", "magic"].includes(flow)) {
+      setMode("signin", { keepNotice: true });
+      showNotice("error", "This sign-in link belongs to a different browser session. Restart sign-in here.");
+      return;
+    }
+    try {
+      await api("/api/auth/callback", { method: "POST", body: { code, codeVerifier: verifier }, auth: "silent" });
+    } catch (error) {
+      setMode("signin", { keepNotice: true });
+      reportError(error);
+      return;
+    }
+    let dest = "/account";
+    try {
+      dest = sessionStorage.getItem("sw-next") || dest;
+      sessionStorage.removeItem("sw-next");
+    } catch {}
+    navigate(dest);
     return;
   }
   const accessToken = fragment.get("access_token"), refreshToken = fragment.get("refresh_token");
   if (!accessToken || !refreshToken) {
+    clearPkce();
     setMode("signin", { keepNotice: true });
     showNotice("warning", "This page expects a sign-in link from your email. Sign in below instead.");
     return;

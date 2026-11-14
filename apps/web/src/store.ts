@@ -3,7 +3,8 @@ import { join } from "node:path";
 import type { Receipt, Report } from "../../../packages/contracts/src/index.ts";
 import type { Brief } from "./ai.ts";
 import { AppError, unauthorized, unavailable } from "./errors.ts";
-import { decryptJson, encryptJson, isEncryptedWithKey } from "./storage-crypto.ts";
+import { deriveKey } from "./security.ts";
+import { decryptJson, encryptJson, isEncryptedJson, isEncryptedWithKey } from "./storage-crypto.ts";
 
 export type StoredReport = { report: Report; receipt: Receipt; brief: Brief };
 export type ReportSummary = { id: string; kind: Report["kind"]; verdict: Report["verdict"]; findings: number; high: number; summary: string; createdAt: string };
@@ -45,10 +46,12 @@ type LocalData = { profile: Omit<Profile, "id" | "email">; reports: StoredReport
 export class LocalStore implements Store {
   #dir: string;
   #reportEncryptionKeys: Buffer[];
+  #localDataEncryptionKeys: Buffer[];
   #cache = new Map<string, LocalData>();
   constructor(stateDir: string, reportEncryptionKeys: Buffer[]) {
     this.#dir = join(stateDir, "data");
     this.#reportEncryptionKeys = reportEncryptionKeys;
+    this.#localDataEncryptionKeys = reportEncryptionKeys.map((key) => deriveKey(key, "signalward", "signalward/local-data-storage/v1"));
     mkdirSync(this.#dir, { recursive: true });
   }
 
@@ -62,12 +65,21 @@ export class LocalStore implements Store {
     if (cached) return cached;
     const file = this.#file(actor.userId);
     const now = new Date().toISOString();
-    const stored = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) as LocalData : null;
-    const data: LocalData = stored
-      ? { ...stored, reports: (stored.reports ?? []).map((item) => decryptJson<StoredReport>(this.#reportEncryptionKeys, item, { context: `local-user:${actor.userId}` })) }
-      : { profile: { displayName: defaultName(actor.email), organization: "", title: "", avatarHue: hueFor(actor.userId), createdAt: now, updatedAt: now }, reports: [], sightings: {}, blocklist: [] };
+    const stored: unknown = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+    let migrate = false;
+    let data: LocalData;
+    if (isEncryptedJson(stored)) {
+      data = decryptJson<LocalData>(this.#localDataEncryptionKeys, stored, { required: true, context: `local-data:${actor.userId}` });
+      migrate = !isEncryptedWithKey(stored, this.#localDataEncryptionKeys[0]!);
+    } else if (stored) {
+      const legacy = stored as LocalData;
+      data = { ...legacy, reports: (legacy.reports ?? []).map((item) => decryptJson<StoredReport>(this.#reportEncryptionKeys, item, { context: `local-user:${actor.userId}` })) };
+      migrate = true;
+    } else {
+      data = { profile: { displayName: defaultName(actor.email), organization: "", title: "", avatarHue: hueFor(actor.userId), createdAt: now, updatedAt: now }, reports: [], sightings: {}, blocklist: [] };
+    }
     this.#cache.set(actor.userId, data);
-    if (stored?.reports.some((item) => !isEncryptedWithKey(item, this.#reportEncryptionKeys[0]!))) this.#save(actor);
+    if (migrate) this.#save(actor);
     return data;
   }
 
@@ -75,7 +87,7 @@ export class LocalStore implements Store {
     const file = this.#file(actor.userId);
     const temp = `${file}.${process.pid}.tmp`;
     const data = this.#load(actor);
-    writeFileSync(temp, JSON.stringify({ ...data, reports: data.reports.map((item) => encryptJson(this.#reportEncryptionKeys[0]!, item, `local-user:${actor.userId}`)) }), { mode: 0o600 });
+    writeFileSync(temp, JSON.stringify(encryptJson(this.#localDataEncryptionKeys[0]!, data, `local-data:${actor.userId}`)), { mode: 0o600 });
     renameSync(temp, file);
   }
 

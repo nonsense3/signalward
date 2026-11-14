@@ -81,6 +81,7 @@ SignalWard runs with **Supabase Auth** when configured, or **local accounts** fo
 - **Magic link**: passwordless email sign-in
 - **Password reset** by email
 - Sessions are stored in an **AES-256-GCM encrypted, HttpOnly cookie**; Supabase tokens are refreshed server-side
+- Local account and workspace records are encrypted at rest; local sign-out and password changes revoke all active sessions for that account, and open activity streams close on revocation
 
 OAuth and magic link require Supabase. Enable the GitHub and Google providers in your Supabase dashboard and add `<PUBLIC_URL>/auth/callback` as a redirect URL.
 
@@ -180,7 +181,7 @@ Rotate the receipt signing key with `node apps/cli/signalward.ts keys rotate`. D
 
 Rotate the indicator key with `node apps/cli/signalward.ts keys rotate-indicators`. Deploy all three values it prints together. During overlap, SignalWard reads and records tags under the active key and retained previous keys; this preserves existing sightings and blocklist matches. Previous indicator keys are secrets. Removing one ends matching for tags created with that version, so retain it until those records are deliberately retired.
 
-Stored report payloads and local-account records use AES-256-GCM. Local-account encryption derives a separate key from the report key with HKDF and a distinct context. Back up `SIGNALWARD_REPORT_ENCRYPTION_KEY` securely; reports or accounts encrypted with lost active and retained keys cannot be recovered. Rotate with `node apps/cli/signalward.ts keys rotate-reports` and deploy both values it prints. Local reports and account records are re-encrypted under the active key on startup; Supabase reports are re-encrypted with the active key when opened or exported. Keep prior keys until all reports/accounts encrypted with them have been re-encrypted or deleted. New Supabase reports are encrypted at the application layer. Previously stored Supabase rows remain marked as legacy plaintext until opened or exported through the app's one-way encryption migration.
+Stored report payloads and local-account/workspace records use AES-256-GCM. Local account and workspace encryption derive separate keys from the report key with HKDF and distinct contexts. Back up `SIGNALWARD_REPORT_ENCRYPTION_KEY` securely; reports or local records encrypted with lost active and retained keys cannot be recovered. Rotate with `node apps/cli/signalward.ts keys rotate-reports` and deploy both values it prints. Local reports, account records and workspace data are re-encrypted under the active key on startup; Supabase reports are re-encrypted with the active key when opened or exported. Keep prior keys until all reports/local records encrypted with them have been re-encrypted or deleted. New Supabase reports are encrypted at the application layer. Previously stored Supabase rows remain marked as legacy plaintext until opened or exported through the app's one-way encryption migration.
 
 ---
 

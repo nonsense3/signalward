@@ -18,9 +18,11 @@ export interface AuthProvider {
   readonly supportsMagicLink: boolean;
   readonly oauthProviders: readonly string[];
   /** Build the provider's hosted authorize URL, or null when OAuth is unavailable. */
-  oauthUrl(provider: string, redirectTo: string): string | null;
+  oauthUrl(provider: string, redirectTo: string, codeChallenge: string): string | null;
   /** Send a passwordless sign-in link. */
-  magicLink(email: string, redirectTo: string): Promise<void>;
+  magicLink(email: string, redirectTo: string, codeChallenge: string): Promise<void>;
+  /** Exchange an OAuth or passwordless authorization code bound to the browser's PKCE verifier. */
+  exchangeCode(code: string, codeVerifier: string): Promise<AuthResult>;
   signUp(email: string, password: string, displayName: string, redirectTo: string): Promise<AuthResult & { needsConfirmation: boolean }>;
   signIn(email: string, password: string): Promise<AuthResult>;
   refresh(refreshToken: string): Promise<AuthResult>;
@@ -162,24 +164,35 @@ export class SupabaseAuth implements AuthProvider {
   }
 
   async signOut(session: SessionData) {
-    if (session.at) await this.#call("logout", { token: session.at, query: { scope: "global" } }).catch(() => undefined);
+    if (session.at) {
+      this.#userCache.delete(createHash("sha256").update(session.at).digest("base64url"));
+      await this.#call("logout", { token: session.at, query: { scope: "global" } }).catch(() => undefined);
+    }
   }
 
   async recover(email: string, redirectTo: string) {
     await this.#call("recover", { body: { email }, query: { redirect_to: redirectTo } });
   }
 
-  oauthUrl(provider: string, redirectTo: string): string | null {
+  oauthUrl(provider: string, redirectTo: string, codeChallenge: string): string | null {
     if (!this.oauthProviders.includes(provider as (typeof this.oauthProviders)[number])) return null;
     const url = new URL("/auth/v1/authorize", this.url);
     url.searchParams.set("provider", provider);
     url.searchParams.set("redirect_to", redirectTo);
+    url.searchParams.set("code_challenge", codeChallenge);
+    url.searchParams.set("code_challenge_method", "s256");
     return url.toString();
   }
 
-  async magicLink(email: string, redirectTo: string) {
+  async magicLink(email: string, redirectTo: string, codeChallenge: string) {
     // create_user so a first-time visitor is onboarded by the same link.
-    await this.#call("otp", { body: { email, create_user: true }, query: { redirect_to: redirectTo } });
+    await this.#call("otp", { body: { email, create_user: true, code_challenge: codeChallenge, code_challenge_method: "s256" }, query: { redirect_to: redirectTo } });
+  }
+
+  async exchangeCode(code: string, codeVerifier: string) {
+    const result = this.#session((await this.#call("token", { body: { auth_code: code, code_verifier: codeVerifier }, query: { grant_type: "pkce" } })) as SupabaseSession);
+    if (!result.tokens) throw unauthorized("The sign-in link could not be exchanged. Restart sign-in.", "AUTH_SESSION_EXPIRED");
+    return result;
   }
 
   async updatePassword(session: SessionData, currentPassword: string, newPassword: string) {
@@ -194,6 +207,36 @@ export class SupabaseAuth implements AuthProvider {
 
 type LocalRecord = { id: string; email: string; salt: string; hash: string; createdAt: string; sv: number; failed: number; lockedUntil: number };
 const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+
+function localUsersFrom(value: unknown): LocalRecord[] {
+  if (!value || typeof value !== "object" || !Array.isArray((value as { users?: unknown }).users) || (value as { users: unknown[] }).users.length > 100_000) {
+    throw new Error("The local account store has an invalid structure; no account data was changed.");
+  }
+  const users = (value as { users: unknown[] }).users.map((entry): LocalRecord => {
+    if (!entry || typeof entry !== "object") throw new Error("The local account store contains an invalid account record.");
+    const user = entry as Record<string, unknown>;
+    if (typeof user.id !== "string" || !/^[0-9a-f-]{36}$/i.test(user.id)
+      || typeof user.email !== "string" || user.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email)
+      || typeof user.salt !== "string" || !/^[A-Za-z0-9+/]{22}==$/.test(user.salt)
+      || typeof user.hash !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(user.hash)
+      || typeof user.createdAt !== "string" || !Number.isFinite(Date.parse(user.createdAt))
+      || !Number.isSafeInteger(user.sv) || (user.sv as number) < 1
+      || !Number.isSafeInteger(user.failed) || (user.failed as number) < 0 || (user.failed as number) > 7
+      || !Number.isSafeInteger(user.lockedUntil) || (user.lockedUntil as number) < 0) {
+      throw new Error("The local account store contains an invalid account record; no account data was changed.");
+    }
+    const salt = Buffer.from(user.salt, "base64");
+    const hash = Buffer.from(user.hash, "base64");
+    if (salt.length !== 16 || salt.toString("base64") !== user.salt || hash.length !== 32 || hash.toString("base64") !== user.hash) {
+      throw new Error("The local account store contains an invalid password verifier; no account data was changed.");
+    }
+    return user as LocalRecord;
+  });
+  if (new Set(users.map((user) => user.id)).size !== users.length || new Set(users.map((user) => user.email.toLowerCase())).size !== users.length) {
+    throw new Error("The local account store contains duplicate identities; no account data was changed.");
+  }
+  return users;
+}
 
 /**
  * File-backed accounts for development and offline demos. Passwords use scrypt (N=2^15) with a random
@@ -219,10 +262,10 @@ export class LocalAuth implements AuthProvider {
     }
     const stored: unknown = JSON.parse(readFileSync(this.#file, "utf8"));
     if (isEncryptedJson(stored)) {
-      this.#users = decryptJson<{ users: LocalRecord[] }>(this.#storageKeys, stored, { required: true, context: "local-auth-users-v1" }).users;
+      this.#users = localUsersFrom(decryptJson(this.#storageKeys, stored, { required: true, context: "local-auth-users-v1" }));
       if (!isEncryptedWithKey(stored, this.#storageKeys[0]!)) this.#save();
     } else {
-      this.#users = (stored as { users: LocalRecord[] }).users;
+      this.#users = localUsersFrom(stored);
       this.#save();
     }
   }
@@ -290,7 +333,12 @@ export class LocalAuth implements AuthProvider {
     return this.#user(record);
   }
 
-  async signOut() {}
+  async signOut(session: SessionData) {
+    const record = this.#users.find((user) => user.id === session.uid);
+    if (!record) return;
+    record.sv += 1;
+    this.#save();
+  }
 
   async recover(): Promise<void> {
     throw new AppError(501, "AUTH_RECOVERY_UNAVAILABLE", "Password reset by email needs Supabase. Ask an administrator to reset local accounts.");
@@ -302,6 +350,10 @@ export class LocalAuth implements AuthProvider {
 
   async magicLink(): Promise<void> {
     throw new AppError(501, "AUTH_MAGIC_UNAVAILABLE", "Magic-link sign-in needs Supabase. Use email and password for local accounts.");
+  }
+
+  async exchangeCode(): Promise<AuthResult> {
+    throw new AppError(501, "AUTH_OAUTH_UNAVAILABLE", "Code exchange needs Supabase authentication.");
   }
 
   async updatePassword(session: SessionData, currentPassword: string, newPassword: string) {
