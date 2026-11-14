@@ -17,11 +17,14 @@ import type { Report } from "../../packages/contracts/src/index.ts";
 import { ScanInputError, memoryContext, primaryAction, runRepositoryScan, runUrlScan } from "../../packages/engine/src/index.ts";
 import { issueReceipt, loadSigningKey, parseTrustedKeyHistory, trustedKeySet, verifyReceipt, type TrustedKey } from "../../packages/receipts/src/index.ts";
 import { readDirectory } from "../../packages/repo-scan/src/index.ts";
+import { fetchRepository } from "../../packages/repo-fetch/src/index.ts";
+import { domainAgeFinding } from "../../packages/url-intel/src/index.ts";
 import { ConfigError, loadEnvFile, readConfig } from "../web/src/env.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const env = loadEnvFile(join(root, ".env"));
 const stateDir = env.SIGNALWARD_STATE_DIR || join(root, ".signalward");
+const urlIntel = env.URL_INTEL !== "off";
 const args = process.argv.slice(2);
 const command = args[0];
 const flag = (name: string) => {
@@ -110,19 +113,28 @@ async function doctor(): Promise<number> {
 async function main(): Promise<number> {
   if (command === "scan") {
     const target = args[1] && !args[1].startsWith("--") ? args[1] : ".";
-    const rootDir = resolve(target);
-    const { files, skipped } = await readDirectory(rootDir);
-    const report = runRepositoryScan(files, basename(rootDir), memoryContext("local_cli", randomBytes(32)));
-    if (skipped && report.scope.kind === "repository") report.scope.skipped += skipped;
+    const ctx = memoryContext("local_cli", randomBytes(32));
+    let report: Report;
+    if (/^https?:\/\//i.test(target) || /^[\w.-]+\/[\w.-]+$/.test(target)) {
+      const token = flag("--token") ?? env.GITHUB_TOKEN ?? env.SIGNALWARD_GITHUB_TOKEN;
+      const fetched = await fetchRepository(target, { ...(flag("--ref") ? { ref: flag("--ref")! } : {}), ...(token ? { token } : {}) });
+      report = runRepositoryScan(fetched.files, fetched.label, ctx);
+    } else {
+      const rootDir = resolve(target);
+      const { files, skipped } = await readDirectory(rootDir);
+      report = runRepositoryScan(files, basename(rootDir), ctx);
+      if (skipped && report.scope.kind === "repository") report.scope.skipped += skipped;
+    }
     emit(report);
     return report.verdict === "pass" ? 0 : report.verdict === "block" ? 1 : 2;
   }
   if (command === "url") {
     if (!args[1]) throw new ScanInputError("USAGE", "Pass a link: signalward url <link>");
-    const report = await runUrlScan(args[1], memoryContext("local_cli", randomBytes(32)));
+    const report = await runUrlScan(args[1], memoryContext("local_cli", randomBytes(32)), urlIntel ? { domainAge: (domain) => domainAgeFinding(domain) } : {});
     emit(report);
     return report.verdict === "high_risk" ? 1 : report.verdict === "low_risk" ? 0 : 2;
   }
+  if (command === "mcp") return mcpServe();
   if (command === "verify") {
     if (!args[1]) throw new ScanInputError("USAGE", "Pass a receipt: signalward verify <receipt.json>");
     const receipt = JSON.parse(readFileSync(args[1], "utf8"));

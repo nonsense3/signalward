@@ -31,6 +31,7 @@ const api = createApi({
   signingKey: loadSigningKey(config.stateDir, config.secrets.signing ? { SIGNALWARD_SIGNING_KEY: config.secrets.signing } : {}),
   previousSigningKeys: config.previousSigningKeys,
   ai: config.ai,
+  urlIntel: config.urlIntel,
   publicUrl: config.publicUrl,
   secureCookies: config.secureCookies,
   allowSignup: config.auth.allowSignup,
