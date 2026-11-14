@@ -1,0 +1,13 @@
+{
+  "name": "signalward",
+  "private": true,
+  "type": "module",
+  "version": "0.2.0",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "node apps/web/server.mjs",
+    "start": "node apps/web/server.mjs",
+    "scan": "node apps/cli/signalward.ts scan",
+    "test": "node --test tests/policy.test.ts"
+  }
+}

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 680">
+  <defs>
+    <linearGradient id="glass" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#aaa1ff" stop-opacity=".74"/><stop offset=".48" stop-color="#292347" stop-opacity=".9"/><stop offset="1" stop-color="#100f21"/>
+    </linearGradient>
+    <linearGradient id="beam"><stop stop-color="#6252ac" stop-opacity="0"/><stop offset=".5" stop-color="#bbabff"/><stop offset="1" stop-color="#6252ac" stop-opacity="0"/></linearGradient>
+  </defs>
+  <g transform="translate(116 75)">
+    <path d="M130 284 477 143 747 238 396 395z M130 350 477 209 747 304 396 461z" fill="none" stroke="#66638f" stroke-width="4"/>
+    <g fill="url(#glass)" stroke="#b6a9f8" stroke-width="2">
+      <path d="m240 292 56-175 103 44 38 151-111 58z"/>
+      <path d="m343 259 61-178 104 48 34 153-114 57z"/>
+      <path d="m449 227 63-177 106 51 27 147-110 62z"/>
+    </g>
+    <path d="M68 366C240 346 365 273 456 247S653 179 754 184" stroke="url(#beam)" stroke-width="3" fill="none"/>
+    <path d="M78 389C249 352 310 347 460 264S628 208 748 205" stroke="url(#beam)" stroke-width="7" stroke-dasharray="1 11" stroke-linecap="round" fill="none"/>
+  </g>
+</svg>

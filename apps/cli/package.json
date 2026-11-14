@@ -1,0 +1,6 @@
+{
+  "name": "@signalward/cli",
+  "private": true,
+  "type": "module",
+  "bin": { "signalward": "./signalward.ts" }
+}

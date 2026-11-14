@@ -1,0 +1,12 @@
+node_modules/
+.next/
+dist/
+coverage/
+.signalward/
+.env
+.env.*
+!.env.example
+
+# Only README.md is published; all other Markdown stays local.
+*.md
+!/README.md

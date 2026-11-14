@@ -1,0 +1,5 @@
+{
+  "name": "@signalward/web",
+  "private": true,
+  "scripts": { "dev": "node server.mjs", "start": "node server.mjs" }
+}
