@@ -18,14 +18,22 @@ const TEXT = {
 };
 let authMethods = null;
 let currentMode = "signin";
+// Until /api/health answers (or if it can't), the single-sign-on buttons stay visible on both sign-in
+// and sign-up; the server's own error explains a provider that turns out to be unavailable.
 function refreshSso() {
-  const available = authMethods && ((authMethods.oauth && authMethods.oauth.length) || authMethods.magicLink);
+  const available = !authMethods || (authMethods.oauth && authMethods.oauth.length) || authMethods.magicLink;
   $("#sso").hidden = !(["signin", "signup"].includes(currentMode) && available);
 }
 function applyMethods() {
-  const oauth = authMethods?.oauth ?? [];
+  if (!authMethods) return;
+  const oauth = authMethods.oauth ?? [];
   for (const el of $$("[data-sso]")) el.hidden = !oauth.includes(el.dataset.sso);
-  for (const el of $$('[data-go="magic"]')) el.hidden = !authMethods?.magicLink;
+  const row = $(".sso__row");
+  if (row) {
+    row.hidden = oauth.length === 0;
+    row.style.gridTemplateColumns = oauth.length === 1 ? "1fr" : "";
+  }
+  for (const el of $$('[data-go="magic"]')) el.hidden = !authMethods.magicLink;
   if (authMethods && !authMethods.signup) for (const el of $$('[data-go="signup"]')) el.closest("p")?.setAttribute("hidden", "");
   if (authMethods && !authMethods.recovery) for (const el of $$('[data-go="forgot"]')) el.hidden = true;
 }
@@ -48,6 +56,10 @@ function setMode(mode, { keepNotice = false } = {}) {
 // Bind the OAuth response to this browser tab with PKCE.
 for (const link of $$("[data-sso]")) link.addEventListener("click", async (event) => {
   event.preventDefault();
+  if (!authMethods) authMethods = await api("/api/health", { auth: "silent" }).catch(() => null);
+  if (!authMethods) return showNotice("error", "The sign-in service isn't reachable right now. Check your connection and try again.");
+  applyMethods();
+  if (!(authMethods.oauth ?? []).includes(link.dataset.sso)) return showNotice("error", "That sign-in method isn't enabled on this server.");
   try {
     const { verifier, challenge } = await createPkce();
     savePkce(verifier, "oauth");

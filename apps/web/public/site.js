@@ -92,6 +92,9 @@ function tick(now) {
   if (where === "hero") {
     if (wide) cx += 0.32 * (rect.width / innerWidth);
     else cy += 0.22;
+  } else if (wide) {
+    // The chapter card sits bottom-left in the frame; keep the formation clear of it.
+    cx += 0.24 * (rect.width / innerWidth);
   }
   s.view.cx = smooth(s.view.cx, cx, 14, dt);
   s.view.cy = smooth(s.view.cy, cy, 14, dt);

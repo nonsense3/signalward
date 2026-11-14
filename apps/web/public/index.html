@@ -63,40 +63,52 @@
       </div>
       <div class="observatory__chapters">
         <article class="chapter" id="detection" data-shape="1" data-label="Detection">
+          <div class="chapter__card">
           <p class="chapter__kicker">Real-time detection</p>
           <h2>Catch the credential at the commit.</h2>
           <p>Twelve credential formats, entropy checks, pinned advisories and CI rules. Matches are redacted before they leave the scanner.</p>
           <ul class="chips"><li class="chip">secrets</li><li class="chip">dependencies</li><li class="chip">pipelines</li></ul>
+          </div>
         </article>
         <article class="chapter" id="zero-trust" data-shape="2" data-label="Zero trust">
+          <div class="chapter__card">
           <p class="chapter__kicker">Zero-trust architecture</p>
           <h2>Every request proves itself.</h2>
           <p>Encrypted, short-lived sessions. Row-level security on every table. Same-origin checks and rate limits on every call.</p>
           <ul class="chips"><li class="chip">AES-256-GCM cookies</li><li class="chip">Postgres RLS</li><li class="chip">strict CSP</li></ul>
+          </div>
         </article>
         <article class="chapter" id="privacy" data-shape="3" data-label="Privacy">
+          <div class="chapter__card">
           <p class="chapter__kicker">Privacy-preserving</p>
           <h2>Correlate without keeping.</h2>
           <p>Phone numbers, UPI IDs, IBANs and wallets become per-account HMAC tags. The raw values are discarded.</p>
           <ul class="chips"><li class="chip">HMAC-SHA-256</li><li class="chip">HKDF per account</li><li class="chip">redacted display</li></ul>
+          </div>
         </article>
         <article class="chapter" id="identity" data-shape="4" data-label="Identity">
+          <div class="chapter__card">
           <p class="chapter__kicker">Identity &amp; auth</p>
           <h2>Check who a message claims to be.</h2>
           <p>Claimed brands are matched against the domains they really operate. Homographs and lookalikes are caught before anyone clicks.</p>
           <ul class="chips"><li class="chip">31 brands</li><li class="chip">homographs</li><li class="chip">typosquats</li></ul>
+          </div>
         </article>
         <article class="chapter" id="fraud" data-shape="5" data-label="Fraud">
+          <div class="chapter__card">
           <p class="chapter__kicker">Fraud prevention</p>
           <h2>Spot fraud before you pay.</h2>
           <p>High-risk results show their evidence. High-confidence URL, domain and IP indicators cited by findings are added to the workspace blocklist and flagged on reuse.</p>
           <ul class="chips"><li class="chip">evidence warning</li><li class="chip">automatic indicator block</li><li class="chip">reuse detection</li></ul>
+          </div>
         </article>
         <article class="chapter" id="evidence" data-shape="6" data-label="Evidence">
+          <div class="chapter__card">
           <p class="chapter__kicker">Verifiable evidence</p>
           <h2>Every verdict ships with a receipt.</h2>
           <p>Reports are canonicalised, hashed and signed with Ed25519. Change one field and verification fails.</p>
           <a class="pill pill--dark" href="/verify">Open the verifier<span class="arrow" aria-hidden="true"></span></a>
+          </div>
         </article>
       </div>
     </section>

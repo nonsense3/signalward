@@ -40,7 +40,12 @@
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html{background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;scroll-padding-top:6rem}
-body{margin:0;min-height:100vh;overflow-x:hidden;background:var(--bg);transition:background .5s var(--ease)}
+body{margin:0;min-height:100vh;overflow-x:hidden;background:var(--bg)}
+/* Theme switch: every colour flips in the same frame (no per-element fades that leave boxes behind). */
+.theme-swap,.theme-swap *,.theme-swap *::before,.theme-swap *::after{transition:none!important}
+::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
+::view-transition-new(root){animation:theme-reveal .7s cubic-bezier(.65,0,.35,1) both}
+@keyframes theme-reveal{from{clip-path:circle(0 at var(--vt-x,90%) var(--vt-y,3rem))}to{clip-path:circle(var(--vt-r,150vmax) at var(--vt-x,90%) var(--vt-y,3rem))}}
 a{color:inherit;text-decoration:none}
 button,input,textarea,select{font:inherit;color:inherit}
 img,svg,canvas{display:block}

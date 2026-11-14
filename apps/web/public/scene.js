@@ -740,7 +740,8 @@ export function startScene(canvas, { compact = false, shape = 0, prisms = true, 
     count: COUNT,
     resume() { running = true; schedule(); },
     pause() { running = false; schedule(); },
-    setLight(on) { state.lightTarget = on ? 1 : 0; },
+    // Snap, not fade: the page colours change in one frame and the canvas must match them.
+    setLight(on) { state.lightTarget = state.light = on ? 1 : 0; schedule(); },
     /** Pointer in canvas NDC (-1..1). */
     pointer(x, y, active) {
       const p = state.pointer;

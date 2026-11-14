@@ -148,11 +148,34 @@ addEventListener("unhandledrejection", (event) => {
 
 /* ---------------------------------------------------------------- Theme */
 
-export function setTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  try { localStorage.setItem("sw-theme", theme); } catch {}
-  for (const meta of $$('meta[name="theme-color"]')) meta.content = theme === "dark" ? "#07080b" : "#e9eaef";
-  dispatchEvent(new CustomEvent("themechange", { detail: theme }));
+/**
+ * Switch theme in one step. Every surface (CSS colours, WebGL canvases) flips in the same frame, so no
+ * panel is left showing the old theme as a box. Where supported, a View Transition reveals the new theme
+ * with a circle growing from the toggle; otherwise transitions are suspended for the swap.
+ */
+export function setTheme(theme, origin) {
+  const root = document.documentElement;
+  const apply = () => {
+    root.dataset.theme = theme;
+    try { localStorage.setItem("sw-theme", theme); } catch {}
+    for (const meta of $$('meta[name="theme-color"]')) meta.content = theme === "dark" ? "#07080b" : "#e9eaef";
+    dispatchEvent(new CustomEvent("themechange", { detail: theme }));
+  };
+  root.classList.add("theme-swap");
+  const done = () => requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("theme-swap")));
+  if (!document.startViewTransition || reducedMotion()) {
+    apply();
+    return done();
+  }
+  const x = origin?.x ?? innerWidth - 80, y = origin?.y ?? 40;
+  root.style.setProperty("--vt-x", `${x}px`);
+  root.style.setProperty("--vt-y", `${y}px`);
+  root.style.setProperty("--vt-r", `${Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y))}px`);
+  // Rendering is paused during the update callback, so it applies synchronously. The new snapshot is
+  // taken on the next frame, after the WebGL canvases have drawn with the snapped theme.
+  const transition = document.startViewTransition(apply);
+  transition.finished.finally(done);
+  transition.ready.catch(() => {});
 }
 export const currentTheme = () => document.documentElement.dataset.theme ?? "light";
 
@@ -290,7 +313,10 @@ function initHeader() {
   const toggle = $("[data-theme-toggle]", header);
   if (toggle) {
     toggle.replaceChildren(parseSvg(MOON, "moon"), parseSvg(SUN, "sun"));
-    toggle.addEventListener("click", () => setTheme(currentTheme() === "dark" ? "light" : "dark"));
+    toggle.addEventListener("click", () => {
+      const rect = toggle.getBoundingClientRect();
+      setTheme(currentTheme() === "dark" ? "light" : "dark", { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+    });
   }
   buildMenu(header);
   let last = scrollY;
